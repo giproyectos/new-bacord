@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Lexend:wght@400;500;600;700;800&display=swap');
+/* Font Awesome via CDN — se carga en index.html */
+
+@import "tailwindcss";
+
+:root {
+  --navy:     #0A2D63;
+  --navy-700: #112651;
+  --navy-900: #07173a;
+  --navy-50:  #eef2f8;
+  --paper:    #F6F4EE;
+  --paper-2:  #EFECE2;
+  --paper-3:  #E6E2D4;
+  --white:    #FFFFFF;
+  --ink:      #0A1530;
+  --ink-2:    #2A3349;
+  --ink-3:    #5B6478;
+  --ink-4:    #8A8F9F;
+  --yellow:   #FFDF64;
+  --yellow-2: #F7C92E;
+  --orange:   #FF6B35;
+  --orange-2: #E64E18;
+  --forest:   #2D5D4A;
+  --forest-2: #1f4231;
+  --hair:        rgba(10,21,48,0.08);
+  --hair-2:      rgba(10,21,48,0.14);
+  --hair-strong: rgba(10,21,48,0.22);
+  --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 18px; --r-xl: 28px;
+  --sh-1: 0 1px 0 rgba(10,21,48,0.04), 0 1px 2px rgba(10,21,48,0.04);
+  --sh-2: 0 1px 0 rgba(10,21,48,0.04), 0 8px 24px -8px rgba(10,21,48,0.12);
+  --sh-3: 0 2px 0 rgba(10,21,48,0.04), 0 18px 40px -12px rgba(10,21,48,0.18);
+  --f-sans: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); font-family: var(--f-sans); -webkit-font-smoothing: antialiased; }
+#root { height: 100vh; }
+button { font-family: inherit; }
+input, select, textarea { font-family: inherit; }
+
+/* ── Clases globales compartidas por las pantallas ── */
+.btn {
+  padding: 7px 16px; border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 500; cursor: pointer; border: none;
+  font-family: var(--f-sans); display: inline-flex; align-items: center; gap: 6px;
+  transition: opacity 100ms;
+}
+.btn:hover:not(:disabled) { opacity: 0.88; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--navy); color: #fff; }
+.btn-success { background: var(--forest); color: #fff; }
+.btn-gray    { background: var(--paper-2); color: var(--ink-3); border: 1.5px solid var(--hair-2); }
+.btn-danger  { background: #dc2626; color: #fff; }
+.btn-warning { background: var(--yellow-2); color: var(--navy-900); }
+
+.form-horizontal .form-group { margin-bottom: 14px; }
+.form-horizontal label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 5px; }
+.form-horizontal .form-control,
+.form-control {
+  width: 100%; padding: 7px 10px;
+  background: var(--white); border: 1.5px solid var(--hair-2);
+  border-radius: var(--r-sm); font-size: 13px; color: var(--ink);
+  font-family: var(--f-sans); outline: none; transition: border-color 120ms;
+}
+.form-control:focus { border-color: var(--navy); }
+.form-control::placeholder { color: var(--ink-4); }
+
+.grid-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+.form-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding-top: 10px; border-top: 1px solid var(--hair); margin-top: 6px;
+}
+
+.table-responsive { overflow-x: auto; }
+
+.text-info    { color: #0ea5e9; text-decoration: none; }
+.text-success { color: var(--forest); text-decoration: none; }
+.text-green   { color: var(--forest); text-decoration: none; }
+.text-danger  { color: #dc2626; text-decoration: none; }
+a.text-info:hover, a.text-success:hover, a.text-green:hover, a.text-danger:hover { opacity: 0.75; }

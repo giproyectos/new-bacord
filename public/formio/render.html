@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Render</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/formiojs@4.14.13/dist/formio.full.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after { box-sizing: border-box; }
+
+    /* ── Base ── */
+    html, body {
+      margin: 0; padding: 18px 20px 28px;
+      font-family: 'Geist', 'Segoe UI', -apple-system, sans-serif;
+      background: #fff; color: #0A1530;
+      -webkit-font-smoothing: antialiased;
+      font-size: 14px; line-height: 1.5;
+    }
+    #render { width: 100%; }
+
+    /* ── Width reset — force form.io column wrappers to fill container ── */
+    /* form.io wraps every field in col-sm-N; without a .row parent the
+       Bootstrap sm breakpoint may not fire, leaving inputs at natural width */
+    .formio-form,
+    .formio-component { width: 100% !important; }
+
+    .formio-component > [class*="col-"] {
+      width: 100% !important;
+      max-width: 100% !important;
+      float: none !important;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    /* But re-allow multi-column layouts to use flex proportional widths */
+    .formio-component-columns > .row > [class*="col-"],
+    .formio-component-columns > [class*="col-"] {
+      width: auto !important;
+      max-width: none !important;
+      flex: 1 !important;
+      padding: 0 !important;
+    }
+
+    /* ── Labels ── */
+    label, .col-form-label, .control-label {
+      font-family: 'Geist', sans-serif !important;
+      font-size: 12px !important;
+      font-weight: 600 !important;
+      color: #374151 !important;
+      margin-bottom: 5px !important;
+      letter-spacing: 0.01em !important;
+      display: block;
+    }
+
+    /* ── Inputs ── */
+    .form-control {
+      display: block !important;
+      width: 100% !important;
+      font-family: 'Geist', sans-serif !important;
+      border: 1.5px solid #CBD5E1 !important;
+      border-radius: 8px !important;
+      padding: 9px 12px !important;
+      font-size: 13.5px !important;
+      color: #111827 !important;
+      background: #fff !important;
+      transition: border-color 120ms, box-shadow 120ms !important;
+      box-shadow: none !important;
+      height: auto !important;
+    }
+    .form-control:focus {
+      border-color: #0A2D63 !important;
+      box-shadow: 0 0 0 3px rgba(10,45,99,0.09) !important;
+      outline: none !important;
+    }
+
+    /* ── OP-locked fields (pre-filled from process order, not editable) ── */
+    .op-locked .form-control,
+    .op-locked .form-control:focus,
+    .op-locked select.form-control {
+      background: #F0F4FF !important;
+      border-color: #BFDBFE !important;
+      color: #1E3A5F !important;
+      cursor: not-allowed !important;
+      box-shadow: none !important;
+      pointer-events: none !important;
+    }
+    .op-locked .col-form-label,
+    .op-locked label {
+      color: #2563EB !important;
+    }
+    .op-locked .col-form-label::after,
+    .op-locked label::after {
+      content: '\f023';
+      font-family: 'FontAwesome';
+      font-size: 9px;
+      margin-left: 5px;
+      color: #93C5FD;
+      vertical-align: middle;
+    }
+    .form-control::placeholder { color: #94A3B8 !important; font-size: 13px !important; }
+
+    textarea.form-control { resize: vertical; min-height: 80px; }
+    select.form-control { cursor: pointer; appearance: auto; }
+
+    /* ── Form groups ── */
+    .form-group, .formio-component { margin-bottom: 18px !important; }
+    .formio-component:last-child { margin-bottom: 4px !important; }
+
+    /* ── Required asterisk ── */
+    .field-required .col-form-label::after,
+    .field-required label::after {
+      content: ' *'; color: #DC2626; font-weight: 700;
+    }
+
+    /* ── Suppress ALL formio built-in validation error display — UX is handled by React parent ── */
+    /* Pink/red container backgrounds */
+    .formio-form .has-error,
+    .formio-form [class*="formio-component"].has-error {
+      background: transparent !important;
+      background-color: transparent !important;
+      border-color: transparent !important;
+    }
+    /* Red borders on inputs */
+    .formio-form .has-error .form-control,
+    .formio-form .form-control.is-invalid,
+    .formio-form .has-error .input-group .form-control {
+      border-color: #CBD5E1 !important;
+      box-shadow: none !important;
+      background-color: #fff !important;
+    }
+    /* Red label / asterisk color reset */
+    .formio-form .has-error label,
+    .formio-form .has-error .col-form-label,
+    .formio-form .has-error .control-label { color: #374151 !important; }
+    /* Hide all error message text blocks */
+    .formio-form .formio-errors,
+    .formio-form .formio-error-wrapper,
+    .formio-form .alert-danger,
+    .formio-form .error-container { display: none !important; }
+    .formio-form .has-error .help-block,
+    .formio-form .has-error .formio-error { display: none !important; }
+
+    /* ── Range error highlight — applied only by our change handler, never on initial load ── */
+    .formio-form .bacord-range-error .form-control,
+    .formio-form .bacord-range-error .input-group .form-control {
+      border-color: #DC2626 !important;
+      box-shadow: 0 0 0 2px rgba(220,38,38,0.13) !important;
+      background-color: #FFF5F5 !important;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      font-family: 'Geist', sans-serif !important;
+      border-radius: 8px !important;
+      font-weight: 600 !important;
+      font-size: 13.5px !important;
+      padding: 8px 18px !important;
+      transition: opacity 120ms, transform 80ms !important;
+      border: none !important;
+      cursor: pointer !important;
+      line-height: 1.4 !important;
+    }
+    .btn:hover { opacity: 0.88 !important; }
+    .btn:active { transform: scale(0.98) !important; }
+    .btn-primary   { background: #0A2D63 !important; color: #fff !important; }
+    .btn-secondary { background: #EFECE2 !important; color: #2A3349 !important; }
+    .btn-success   { background: #2D5D4A !important; color: #fff !important; }
+    .btn-danger    { background: #DC2626 !important; color: #fff !important; }
+    .btn-warning   { background: #F7C92E !important; color: #07173a !important; }
+    .btn-info      { background: #0284C7 !important; color: #fff !important; }
+    .btn-default   { background: #EFECE2 !important; color: #2A3349 !important; border: 1.5px solid rgba(10,21,48,0.14) !important; }
+
+    /* ── Checkboxes & Radios ── */
+    .form-check { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+    .form-check-input, input[type="checkbox"], input[type="radio"] {
+      accent-color: #0A2D63 !important;
+      width: 15px !important; height: 15px !important;
+      cursor: pointer !important; flex-shrink: 0 !important;
+    }
+    .form-check-label, .radio label, .checkbox label {
+      font-size: 13.5px !important; color: #111827 !important;
+      font-weight: 400 !important; cursor: pointer !important; margin-bottom: 0 !important;
+    }
+    /* Radio option as a card */
+    .formio-component-radio .form-check {
+      padding: 8px 13px; border-radius: 8px;
+      border: 1.5px solid #E2E8F0; background: #fff;
+      transition: border-color 100ms, background 100ms;
+    }
+    .formio-component-radio .form-check:has(input:checked) {
+      border-color: #0A2D63; background: rgba(10,45,99,0.04);
+    }
+    /* Inline radio: horizontal */
+    .formio-component-radio.radio-inline .form-check {
+      display: inline-flex; margin-right: 8px; margin-bottom: 6px;
+    }
+
+    /* ── Input groups ── */
+    .input-group {
+      display: flex !important;
+      flex-wrap: nowrap !important;
+      align-items: stretch !important;
+      width: 100% !important;
+    }
+    .input-group > .form-control {
+      flex: 1 1 auto !important;
+      width: 1% !important;
+      min-width: 0 !important;
+      position: relative !important;
+      z-index: 1 !important;
+    }
+    .input-group-prepend,
+    .input-group-append {
+      display: flex !important;
+      align-items: center !important;
+    }
+    .input-group-text, .input-group-addon {
+      font-family: 'Geist', sans-serif !important;
+      background: #F6F4EE !important;
+      border: 1.5px solid rgba(10,21,48,0.16) !important;
+      color: #5B6478 !important;
+      font-size: 13.5px !important;
+      padding: 8px 12px !important;
+      display: flex !important;
+      align-items: center !important;
+      white-space: nowrap !important;
+    }
+    .input-group .form-control { border-radius: 8px 0 0 8px !important; }
+    .input-group .input-group-text:first-child,
+    .input-group .input-group-addon:first-child { border-radius: 8px 0 0 8px !important; }
+    .input-group-append .btn,
+    .input-group-append .input-group-text { border-radius: 0 8px 8px 0 !important; }
+    .input-group-prepend .btn,
+    .input-group-prepend .input-group-text { border-radius: 8px 0 0 8px !important; }
+
+    /* ── Panel / Card ── */
+    .card, .panel, .panel-default {
+      border: 1.5px solid rgba(10,21,48,0.12) !important;
+      border-radius: 12px !important;
+      overflow: visible !important;
+      box-shadow: 0 2px 8px rgba(10,21,48,0.06) !important;
+      margin-bottom: 16px !important;
+    }
+    .card-header, .panel-heading {
+      background: #F6F4EE !important;
+      border-bottom: 1px solid rgba(10,21,48,0.08) !important;
+      padding: 10px 18px !important;
+      font-family: 'Geist', sans-serif !important;
+      font-weight: 700 !important; font-size: 13.5px !important;
+      color: #0A1530 !important;
+      border-radius: 11px 11px 0 0 !important;
+    }
+    .card-body, .panel-body { padding: 18px !important; }
+
+    /* ── Description / help text ── */
+    .help-block, .form-text {
+      font-size: 11.5px !important; color: #64748B !important;
+      margin-top: 5px !important; font-style: normal !important; line-height: 1.5 !important;
+    }
+    .help-block.text-danger { color: #64748B !important; font-size: 12px !important; }
+
+    /* ── Firma preview button ── */
+    .firma-preview-btn:hover {
+      background: #EDE9FE !important; border-color: #6D28D9 !important; color: #5B21B6 !important;
+    }
+    .firma-preview-btn:active { transform: scale(0.97); }
+
+    /* ── Tables (survey / datagrid) ── */
+    .table {
+      font-family: 'Geist', sans-serif !important;
+      border-collapse: separate !important; border-spacing: 0 !important;
+      width: 100% !important; font-size: 13.5px !important;
+      border-radius: 8px !important; overflow: hidden !important;
+    }
+    .table thead th {
+      background: #F6F4EE !important; font-size: 11.5px !important;
+      font-weight: 700 !important; color: #5B6478 !important;
+      border-bottom: 1.5px solid rgba(10,21,48,0.12) !important;
+      padding: 9px 14px !important;
+      text-align: center !important;
+      white-space: normal !important; word-break: break-word !important;
+    }
+    .table thead th:first-child { text-align: left !important; }
+    .table tbody td {
+      padding: 8px 14px !important; color: #2A3349 !important;
+      border-bottom: 1px solid rgba(10,21,48,0.06) !important;
+      text-align: center !important; vertical-align: middle !important;
+    }
+    .table tbody td:first-child { text-align: left !important; font-size: 13px !important; }
+    .table tbody tr:nth-child(even) td { background: #FAFAFA !important; }
+    .table tbody tr:last-child td { border-bottom: none !important; }
+    .table-bordered { border: 1.5px solid rgba(10,21,48,0.12) !important; border-radius: 8px !important; overflow: hidden !important; }
+    /* Survey radio cells — center the radio in the cell */
+    .table tbody td input[type="radio"] {
+      display: block !important; margin: 0 auto !important;
+      accent-color: #0A2D63 !important; width: 16px !important; height: 16px !important;
+    }
+
+    /* ── DataGrid ── */
+    .dg-scroll-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
+    .datagrid-table { border: 1.5px solid rgba(10,21,48,0.12) !important; border-radius: 8px !important; overflow: visible !important; }
+    .dg-scroll-wrap > table.datagrid-table { width: auto !important; min-width: 100% !important; border-radius: 0 !important; }
+    .datagrid-table thead th { white-space: nowrap !important; word-break: normal !important; }
+    .datagrid-col-resizing { cursor: col-resize !important; user-select: none !important; }
+    .datagrid-col-resizing * { user-select: none !important; }
+    .btn-sm { padding: 4px 12px !important; font-size: 12px !important; border-radius: 6px !important; }
+
+    /* ── Disabled textfield display (replaces <input> so long text wraps) ── */
+    .dtext {
+      display: block; width: 100%; font-family: 'Geist', sans-serif !important;
+      font-size: 13.5px !important; border-radius: 8px !important;
+      padding: 9px 12px !important; min-height: 38px !important;
+      border: 1.5px solid #CBD5E1 !important;
+      background: #F8FAFC !important; color: #6B7280 !important;
+      word-break: break-word; white-space: pre-wrap; overflow-wrap: anywhere;
+      line-height: 1.5 !important; cursor: not-allowed; box-sizing: border-box;
+    }
+    .dtext.dtext-op {
+      background: #F0F4FF !important; border-color: #BFDBFE !important;
+      color: #1E3A5F !important;
+    }
+    td .dtext {
+      font-size: 13px !important; padding: 5px 8px !important;
+      min-height: 28px !important; border-radius: 6px !important;
+    }
+
+    /* DataGrid remove row button — FA4 icon doesn't load in FA5; replace with CSS × */
+    .formio-button-remove-row {
+      background: #FEF2F2 !important;
+      border: 1.5px solid #FCA5A5 !important;
+      color: #EF4444 !important;
+      width: 32px !important; height: 32px !important;
+      padding: 0 !important;
+      display: inline-flex !important;
+      align-items: center !important; justify-content: center !important;
+    }
+    .formio-button-remove-row i,
+    .formio-button-remove-row span { display: none !important; }
+    .formio-button-remove-row::after {
+      content: '×';
+      font-size: 18px; font-weight: 700;
+      font-family: 'Geist', sans-serif; line-height: 1; color: #EF4444;
+    }
+    .formio-button-remove-row:hover { background: #FEE2E2 !important; }
+
+    /* DataGrid add row button */
+    .formio-button-add-row {
+      margin-top: 10px !important;
+      background: #EFF6FF !important;
+      border: 1.5px solid #BFDBFE !important;
+      color: #2563EB !important;
+    }
+    .formio-button-add-row:hover { background: #DBEAFE !important; }
+
+    /* ── Day component (day / month / year selects in a Bootstrap row) ── */
+    .formio-component-day .row {
+      display: flex !important; gap: 8px !important; margin: 0 !important;
+    }
+    .formio-component-day .row > [class*="col-"] {
+      flex: 1 !important; padding: 0 !important;
+      max-width: none !important; min-width: 0 !important; width: auto !important;
+    }
+    .formio-component-day .row > [class*="col-"] label {
+      font-size: 11px !important; color: #8A8F9F !important; font-weight: 500 !important;
+    }
+
+    /* ── DateTime (flatpickr + input-group) ── */
+    .formio-component-datetime .input-group-append .btn {
+      border-radius: 0 8px 8px 0 !important;
+      border: 1.5px solid rgba(10,21,48,0.16) !important; border-left: none !important;
+      background: #F6F4EE !important; color: #5B6478 !important;
+      padding: 0 10px !important;
+    }
+    .formio-component-datetime .flatpickr-input {
+      border-radius: 8px 0 0 8px !important; border: 1.5px solid rgba(10,21,48,0.16) !important;
+    }
+
+    /* ── Content HTML components ── */
+    .formio-component-content { line-height: 1.65; margin-bottom: 6px !important; }
+    /* Headings generated by the BACord heading component — scoped to .bacord-heading class
+       so that custom content HTML with its own headings is never affected */
+    .formio-component-content h1.bacord-heading,
+    .formio-component-content h2.bacord-heading,
+    .formio-component-content h3.bacord-heading,
+    .formio-component-content h4.bacord-heading {
+      font-family: 'Geist', sans-serif !important;
+      font-weight: 700 !important;
+      color: #0A1530 !important;
+      margin: 14px 0 8px !important;
+      padding-bottom: 6px !important;
+      border-bottom: 1.5px solid #EEF2F9 !important;
+      display: flex !important;
+      align-items: flex-start !important;
+      gap: 8px !important;
+      text-transform: none !important;
+      letter-spacing: normal !important;
+    }
+    .formio-component-content h1.bacord-heading::before,
+    .formio-component-content h2.bacord-heading::before,
+    .formio-component-content h3.bacord-heading::before,
+    .formio-component-content h4.bacord-heading::before {
+      content: ''; display: inline-block;
+      width: 3px; border-radius: 2px;
+      background: #0A2D63; flex-shrink: 0; margin-top: 3px;
+    }
+    .formio-component-content h1.bacord-heading { font-size: 20px !important; }
+    .formio-component-content h1.bacord-heading::before { height: 20px; }
+    .formio-component-content h2.bacord-heading { font-size: 16px !important; }
+    .formio-component-content h2.bacord-heading::before { height: 16px; }
+    .formio-component-content h3.bacord-heading { font-size: 13.5px !important; }
+    .formio-component-content h3.bacord-heading::before { height: 14px; }
+    .formio-component-content h4.bacord-heading {
+      font-size: 11.5px !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.07em !important;
+      color: #64748B !important;
+    }
+    .formio-component-content h4.bacord-heading::before { height: 11px; background: #94A3B8; }
+    .formio-component-content p  { margin: 0 0 8px; font-size: 13.5px; color: #374151; }
+    .formio-component-content img { max-width: 100%; border-radius: 8px; display: block; }
+    .formio-component-content hr { border: none; border-top: 1.5px solid #EEF2F9; margin: 8px 0; }
+    .formio-component-content strong { font-weight: 700; }
+    .formio-component-content ul, .formio-component-content ol { padding-left: 20px; margin: 0 0 10px; }
+    .formio-component-content li { margin-bottom: 4px; font-size: 13.5px; }
+
+    /* ── Columns ── */
+    /* Make the columns container itself a flex row, covering both:
+       A) form.io wraps in .row:  .formio-component-columns > .row > .col-sm-6
+       B) form.io renders directly: .formio-component-columns > .col-sm-6          */
+    .formio-component-columns {
+      display: flex !important;
+      flex-wrap: nowrap !important;
+      align-items: flex-start !important;
+      gap: 16px !important;
+      margin-bottom: 16px;
+    }
+    /* Case A: .row is the only flex child — give it full width, then lay out cols inside */
+    .formio-component-columns > .row {
+      flex: 1 1 100% !important;
+      display: flex !important;
+      flex-wrap: nowrap !important;
+      margin: 0 !important;
+      gap: 16px !important;
+    }
+    /* Both cases: column divs get equal flex width */
+    .formio-component-columns > .row > [class*="col-"],
+    .formio-component-columns > [class*="col-"] {
+      flex: 1 !important;
+      padding: 0 !important;
+      max-width: none !important;
+      min-width: 0 !important;
+      width: auto !important;
+    }
+
+    /* ── Choices.js (select) ── */
+    .choices__inner {
+      font-family: 'Geist', sans-serif !important;
+      border: 1.5px solid #CBD5E1 !important;
+      border-radius: 8px !important;
+      padding: 7px 10px !important;
+      font-size: 13.5px !important;
+      background: #fff !important;
+      min-height: auto !important;
+    }
+    .choices__inner:focus-within { border-color: #0A2D63 !important; box-shadow: 0 0 0 3px rgba(10,45,99,0.09) !important; }
+    .choices__input { font-family: 'Geist', sans-serif !important; font-size: 13px !important; background: transparent !important; }
+    .choices__list--dropdown { border-radius: 8px !important; border: 1.5px solid #CBD5E1 !important; box-shadow: 0 8px 24px rgba(10,21,48,0.12) !important; margin-top: 4px !important; overflow: hidden; z-index: 9999 !important; position: absolute !important; }
+    .choices__list--dropdown .choices__item--selectable { font-size: 13.5px !important; color: #2A3349 !important; padding: 9px 12px !important; }
+    .choices__list--dropdown .choices__item--selectable.is-highlighted { background: #EEF2FF !important; color: #0A2D63 !important; }
+
+    /* ── Flatpickr (datetime) ── */
+    .flatpickr-input { font-family: 'Geist', sans-serif !important; }
+    .flatpickr-calendar { font-family: 'Geist', sans-serif !important; border-radius: 12px !important; box-shadow: 0 8px 32px rgba(10,21,48,0.14) !important; }
+    .flatpickr-day.selected { background: #0A2D63 !important; border-color: #0A2D63 !important; }
+    .flatpickr-day:hover { background: #EEF2FF !important; }
+
+    /* ── Alert / validation errors ── */
+    .alert-danger { background: #FEF2F2 !important; border: 1.5px solid #FECACA !important; border-radius: 8px !important; color: #DC2626 !important; font-size: 13px !important; padding: 10px 14px !important; }
+  </style>
+</head>
+<body>
+  <input name="jsonData" id="jsonData" value="" type="hidden" />
+  <div id="render"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/formiojs@4.14.13/dist/formio.full.min.js"></script>
+  <script>
+    window.onload = function () {
+      var currentForm = null;
+      var currentSchema = null;
+
+      function patch24hSchema(node) {
+        if (!node) return;
+        if (node.type === 'datetime' || node.type === 'time') {
+          if (!node.widget) node.widget = {};
+          node.widget.time_24hr = true;
+        }
+        (node.components || []).forEach(patch24hSchema);
+        (node.columns || []).forEach(function(col) { (col.components || []).forEach(patch24hSchema); });
+        (node.rows || []).forEach(function(row) { (Array.isArray(row) ? row : []).forEach(patch24hSchema); });
+      }
+
+      function notifyHeight() {
+        var h = document.body.scrollHeight;
+        window.top.postMessage({ type: 'HEIGTH', value: h + 'px' }, '*');
+      }
+
+      // ── Datagrid column resizing ─────────────────────────────────────────
+      // ── Disabled text-input → wrapping div ──────────────────────────────
+      // <input type="text"> is always single-line; long values get cut off.
+      // This replaces every disabled text input with a div that wraps text.
+      // Called after render and on every form change so calculated fields stay current.
+      function fixDisabledTextInputs() {
+        document.querySelectorAll('input[type="text"][disabled]').forEach(function(input) {
+          var val = input.value || '';
+          if (input._dtext) {
+            // Already replaced — just sync the text if it changed
+            if (input._dtext.textContent !== val) input._dtext.textContent = val;
+            return;
+          }
+          var isOp = !!input.closest('.op-locked');
+          var div = document.createElement('div');
+          div.className = 'dtext' + (isOp ? ' dtext-op' : '');
+          div.textContent = val;
+          input.parentNode.insertBefore(div, input.nextSibling);
+          input.style.setProperty('display', 'none', 'important');
+          input._dtext = div;
+        });
+      }
+
+      // Uses event delegation on <thead tr> — no position:relative on <th> which
+      // would create a stacking-context bug inside .card (overflow:hidden) panels.
+      var colWidths = {};
+      var RESIZE_EDGE = 7; // px from right edge of a <th> that activates resize
+
+      function getResizeTh(theadRow, clientX) {
+        var ths = theadRow.querySelectorAll('th');
+        for (var i = 0; i < ths.length - 1; i++) {
+          var rect = ths[i].getBoundingClientRect();
+          if (clientX >= rect.right - RESIZE_EDGE && clientX <= rect.right + 2) return { th: ths[i], idx: i };
+          if (clientX < rect.right) return null;
+        }
+        return null;
+      }
+
+      // Keys of textfields inside datagrids that capture time via button.
+      // New rows should never inherit the previous row's captured time.
+      var DG_TIME_KEYS = ['txtHoraPesaje', 'txtHoraMuestreo', 'txtHoraInsp'];
+
+      function initDgRowCounts(form, counts) {
+        form.everyComponent(function(comp) {
+          if (comp.type === 'datagrid' && comp.key) {
+            counts[comp.key] = Array.isArray(comp.rows) ? comp.rows.length : 0;
+          }
+        });
+      }
+
+      function clearNewRowTimeFields(form, counts) {
+        form.everyComponent(function(comp) {
+          if (comp.type !== 'datagrid' || !comp.key) return;
+          var prev = counts[comp.key];
+          var curr = Array.isArray(comp.rows) ? comp.rows.length : 0;
+          counts[comp.key] = curr;
+          if (prev == null || curr <= prev) return;
+          for (var ri = prev; ri < curr; ri++) {
+            if (!comp.rows[ri]) continue;
+            DG_TIME_KEYS.forEach(function(tk) {
+              var c = comp.rows[ri][tk];
+              if (c && c.getValue()) c.setValue('', { noUpdateEvent: true });
+            });
+          }
+        });
+      }
+
+      function wrapDatagrids() {
+        document.querySelectorAll('table.datagrid-table').forEach(function(table) {
+          if (table.parentElement && table.parentElement.classList.contains('dg-scroll-wrap')) return;
+          var wrap = document.createElement('div');
+          wrap.className = 'dg-scroll-wrap';
+          table.parentNode.insertBefore(wrap, table);
+          wrap.appendChild(table);
+        });
+      }
+
+      function initDatagridResizing() {
+        document.querySelectorAll('.datagrid-table').forEach(function(table) {
+          if (table._resizeInit) return; // already wired up
+          var theadRow = table.querySelector('thead tr');
+          if (!theadRow) return;
+
+          var wrapper = table.closest('[data-key]');
+          var tableKey = wrapper ? wrapper.getAttribute('data-key') : null;
+
+          // Colgroup for width control (doesn't touch th, avoids stacking-context bug)
+          var colgroup = table.querySelector('colgroup.rc-colgroup');
+          if (!colgroup) {
+            var thCount = theadRow.querySelectorAll('th').length;
+            colgroup = document.createElement('colgroup');
+            colgroup.className = 'rc-colgroup';
+            for (var n = 0; n < thCount; n++) colgroup.appendChild(document.createElement('col'));
+            table.insertBefore(colgroup, table.firstChild);
+          }
+
+          // Restore saved widths (all values are real rendered widths, never 0)
+          if (tableKey && colWidths[tableKey]) {
+            var savedCols = colgroup.querySelectorAll('col');
+            colWidths[tableKey].forEach(function(w, i) {
+              if (savedCols[i]) { savedCols[i].style.width = w + 'px'; savedCols[i].style.minWidth = '0'; }
+            });
+            table.style.tableLayout = 'fixed';
+          }
+
+          table._resizeInit = true;
+
+          // Cursor feedback: col-resize near right edge of any non-last column
+          theadRow.addEventListener('mousemove', function(e) {
+            theadRow.style.cursor = getResizeTh(theadRow, e.clientX) ? 'col-resize' : '';
+          });
+          theadRow.addEventListener('mouseleave', function() { theadRow.style.cursor = ''; });
+
+          // Start resize on mousedown near right edge
+          theadRow.addEventListener('mousedown', function(e) {
+            var hit = getResizeTh(theadRow, e.clientX);
+            if (!hit) return;
+            e.preventDefault();
+            document.body.classList.add('datagrid-col-resizing');
+
+            var ths  = Array.from(theadRow.querySelectorAll('th'));
+            var cols = Array.from(colgroup.querySelectorAll('col'));
+
+            // Snapshot every column's current rendered width BEFORE switching layout
+            var origWidths = ths.map(function(th) { return th.getBoundingClientRect().width; });
+            cols.forEach(function(col, i) {
+              col.style.width    = origWidths[i] + 'px';
+              col.style.minWidth = '0';          // let col shrink freely during drag
+            });
+            table.style.tableLayout = 'fixed';  // safe: all cols now have explicit widths
+
+            var startX     = e.clientX;
+            var dragW      = origWidths[hit.idx];
+            var nextIdx    = hit.idx + 1;
+            var nextW      = origWidths[nextIdx] || 0;
+            var MIN_COL    = 40;
+
+            function onMove(e) {
+              var delta  = e.clientX - startX;
+              // Clamp so neither the dragged col nor its right neighbour goes below MIN_COL
+              delta = Math.max(delta, -(dragW  - MIN_COL));
+              delta = Math.min(delta,   nextW  - MIN_COL);
+              cols[hit.idx].style.width = (dragW + delta) + 'px';
+              if (cols[nextIdx]) cols[nextIdx].style.width = (nextW - delta) + 'px';
+            }
+            function onUp() {
+              document.body.classList.remove('datagrid-col-resizing');
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              if (tableKey) {
+                // Save actual rendered widths of every column
+                colWidths[tableKey] = ths.map(function(th) {
+                  return Math.round(th.getBoundingClientRect().width);
+                });
+              }
+              notifyHeight();
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        });
+      }
+
+      function createForm(schema, submissionData, options) {
+        // Save current form data before destroying so a re-render does not erase typed values.
+        var savedSubmission = null;
+        if (currentForm) {
+          try { savedSubmission = currentForm.submission; } catch(e) {}
+          try { currentForm.destroy(); } catch(e) {}
+          document.getElementById('render').innerHTML = '';
+        }
+        currentSchema = schema;
+        Formio.icons = 'fontawesome';
+        try { patch24hSchema(schema); } catch(e) { console.warn('[render] patch24hSchema error', e); }
+        var formOptions = Object.assign({ breadcrumbSettings: { clickable: false } }, options || {});
+        Formio.createForm(document.getElementById('render'), schema, formOptions).then(function (form) {
+          currentForm = form;
+          var _dgRowCounts = {};
+          // Explicit submissionData wins; otherwise restore what was typed before.
+          var dataToRestore = submissionData || savedSubmission;
+          if (dataToRestore) form.submission = dataToRestore;
+          if (!formOptions.readOnly) {
+            // Extract min/max from schema for manual range checking (avoids form.checkValidity dirty=true which shows red borders on load)
+            var schemaLimits = {};
+            (function extractLimits(comps) {
+              (comps || []).forEach(function(c) {
+                if (c.validate) {
+                  var hasMin = c.validate.min !== undefined && c.validate.min !== null;
+                  var hasMax = c.validate.max !== undefined && c.validate.max !== null;
+                  if (hasMin || hasMax) schemaLimits[c.key] = { min: hasMin ? Number(c.validate.min) : null, max: hasMax ? Number(c.validate.max) : null, label: c.label || c.key };
+                }
+                if (c.components) extractLimits(c.components);
+                if (c.columns) c.columns.forEach(function(col) { extractLimits(col.components || []); });
+              });
+            })(schema.components || []);
+
+            var rangeErrors = {};
+
+            form.on('change', function(changeEvt) {
+              clearNewRowTimeFields(form, _dgRowCounts);
+              var jsonData = JSON.stringify(form.submission, null, 4);
+              document.getElementById('jsonData').value = jsonData;
+              fixDisabledTextInputs();
+              notifyHeight();
+              window.top.postMessage({ type: 'GET_JSONDATA', value: jsonData }, '*');
+              // Only check ranges when a field actually changes — changeEvt.changed is undefined on initial data load
+              if (changeEvt && changeEvt.changed && changeEvt.changed.component) {
+                var comp   = changeEvt.changed.component;
+                var key    = comp.key;
+                var val    = form.submission.data[key];
+                var limits = schemaLimits[key];
+                delete rangeErrors[key];
+                // Clear any previous range-error highlight on this field
+                var formioComp = form.getComponent(key);
+                if (formioComp && formioComp.element) {
+                  formioComp.element.classList.remove('bacord-range-error');
+                }
+                if (limits && val !== '' && val !== null && val !== undefined) {
+                  var num = parseFloat(val);
+                  if (!isNaN(num)) {
+                    var inError = false;
+                    if (limits.min !== null && num < limits.min) {
+                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (mín. ' + limits.min + ')' };
+                      inError = true;
+                    } else if (limits.max !== null && num > limits.max) {
+                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (máx. ' + limits.max + ')' };
+                      inError = true;
+                    }
+                    // Apply red border directly on the component element (bypasses formio's own validation)
+                    if (inError && formioComp && formioComp.element) {
+                      formioComp.element.classList.add('bacord-range-error');
+                    }
+                  }
+                }
+              }
+              var errs = Object.keys(rangeErrors).map(function(k) { return rangeErrors[k]; });
+              window.top.postMessage({ type: 'VALIDATION_STATUS', valid: errs.length === 0, errors: errs }, '*');
+            });
+          }
+          // Init after render
+          setTimeout(function() {
+            fixDisabledTextInputs();
+            wrapDatagrids();
+            initDatagridResizing();
+            initDgRowCounts(form, _dgRowCounts);
+            notifyHeight();
+            // Reset all components to pristine so initial data load leaves no error markers
+            try { form.getAllComponents().forEach(function(c) { c.setPristine(true); }); } catch(e) {}
+          }, 400);
+          var renderEl = document.getElementById('render');
+          if (renderEl._resizeObserver) renderEl._resizeObserver.disconnect();
+          var obs = new MutationObserver(function() { wrapDatagrids(); initDatagridResizing(); fixDisabledTextInputs(); });
+          obs.observe(renderEl, { childList: true, subtree: true });
+          renderEl._resizeObserver = obs;
+        }).catch(function(err) {
+          console.error('[render] Formio.createForm failed:', err);
+          document.getElementById('render').innerHTML =
+            '<div style="color:#DC2626;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px 16px;font-size:13px;margin:8px 0;">' +
+            '<strong>Error al cargar el formulario:</strong> ' + (err && err.message ? err.message : String(err)) + '</div>';
+          notifyHeight();
+        });
+      }
+
+      // Delegated listener for firma-preview buttons injected via HTML content components.
+      // We use event delegation instead of onclick attrs because form.io runs content HTML
+      // through DOMPurify which strips inline event handlers.
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.firma-preview-btn');
+        if (!btn) return;
+        var d = btn.dataset;
+        window.parent.postMessage({ type: 'FIRMA_PREVIEW', firmaKey: d.fk, texto: d.tx, grupo: d.gr }, '*');
+      });
+
+      // Walk schema and disable fields that come from the OP (either via opMapping or explicit lockedKeys list)
+      function lockOpMappedFields(schema, lockedKeys) {
+        var locked = new Set(Array.isArray(lockedKeys) ? lockedKeys : []);
+        function walk(comps) {
+          if (!Array.isArray(comps)) return;
+          comps.forEach(function(c) {
+            if (c.opMapping || (c.key && locked.has(c.key))) {
+              c.disabled = true;
+              c.customClass = (c.customClass ? c.customClass + ' ' : '') + 'op-locked';
+            }
+            if (c.components) walk(c.components);
+            if (Array.isArray(c.columns)) c.columns.forEach(function(col) { walk(col.components); });
+            if (Array.isArray(c.rows)) c.rows.forEach(function(row) { Array.isArray(row) && row.forEach(function(cell) { walk(cell.components); }); });
+          });
+        }
+        walk(schema.components);
+      }
+
+      window.addEventListener('message', function (e) {
+        if (e.data.type === 'RENDER_JSON') {
+          if (!e.data.value) {
+            document.getElementById('render').innerHTML =
+              '<div style="color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0;">Schema vacío — el formulario no tiene campos configurados.</div>';
+            notifyHeight(); return;
+          }
+          try { createForm(JSON.parse(e.data.value), null, null); }
+          catch(err) { console.error('RENDER_JSON parse error', err); }
+        }
+        if (e.data.type === 'RENDER_JSON_WITH_DATA') {
+          if (!e.data.value) {
+            document.getElementById('render').innerHTML =
+              '<div style="color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0;">Schema vacío — el formulario no tiene campos configurados.</div>';
+            notifyHeight(); return;
+          }
+          try {
+            var schema = JSON.parse(e.data.value);
+            lockOpMappedFields(schema, e.data.lockedKeys || []);
+            createForm(schema, JSON.parse(e.data.data), null);
+          }
+          catch(err) { console.error('RENDER_JSON_WITH_DATA parse error', err); }
+        }
+        if (e.data.type === 'LOCK_FORM') {
+          // Re-render el formulario en modo solo lectura conservando los datos ingresados.
+          if (currentForm && currentSchema) {
+            var savedSub = null;
+            try { savedSub = currentForm.submission; } catch(e) {}
+            createForm(currentSchema, savedSub, { readOnly: true });
+          }
+        }
+        if (e.data.type === 'GETDATA_JSON') {
+          window.top.postMessage({ type: 'GETDATARESPONSE_JSON', value: document.getElementById('jsonData').value }, '*');
+        }
+      });
+    };
+  </script>
+</body>
+</html>

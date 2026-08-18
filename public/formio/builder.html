@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Builder</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/formiojs@4.14.13/dist/formio.full.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
+  <style>
+    body { margin: 0; padding: 4px; font-family: 'Segoe UI', sans-serif; background: #fff; box-sizing: border-box; }
+    #builder-wrapper { width: 100%; max-width: 100%; padding: 4px; margin: 0; box-sizing: border-box; }
+    #builder .formio-form { margin-top: 1.5rem; }
+    @media (max-width: 768px) {
+      #builder .formio-form { margin-top: 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+  <input name="jsonSchema" id="jsonSchema" value="" type="hidden" />
+  <div id="builder-wrapper">
+    <div id="builder"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/formiojs@4.14.13/dist/formio.full.min.js"></script>
+  <script>
+    window.onload = function () {
+      var currentForm = null;
+
+      function getMenu() {
+        var componentsToHide = [
+          { key: 'labelPosition',        ignore: true },
+          { key: 'widget.type',          ignore: true },
+          { key: 'inputMask',            ignore: true },
+          { key: 'displayMask',          ignore: true },
+          { key: 'allowMultipleMasks',   ignore: true },
+          { key: 'customClass',          ignore: true },
+          { key: 'prefix',               ignore: true },
+          { key: 'suffix',               ignore: true },
+          { key: 'hidden',               ignore: true },
+          { key: 'hideLabel',            ignore: true },
+          { key: 'showWordCount',        ignore: true },
+          { key: 'showCharCount',        ignore: true },
+          { key: 'autofocus',            ignore: true },
+          { key: 'spellcheck',           ignore: true },
+          { key: 'disabled',             ignore: true },
+          { key: 'tableView',            ignore: true },
+          { key: 'modalEdit',            ignore: true },
+          { key: 'hideInput',            ignore: true },
+          { key: 'mask',                 ignore: true },
+          { key: 'tabindex',             ignore: true },
+          { key: 'autocomplete',         ignore: true }
+        ];
+
+        var textos = {
+          "Label": "Etiqueta",
+          "Placeholder": "Marcador de posición",
+          "Description": "Descripción",
+          "Tooltip": "Tooltip",
+          "Input Mask": "Máscara de entrada",
+          "Custom CSS Class": "Clase CSS personalizada",
+          "Hidden ": "Oculto",
+          "Hide Label": "Ocultar la etiqueta",
+          "Show Word Counter": "Mostrar contador de palabras",
+          "Show Character Counter": "Mostrar contador de caracteres",
+          "Initial Focus": "Enfoque inicial",
+          "Allow Spellcheck": "Permitir revisión ortográfica",
+          "Disabled": "Deshabilitado",
+          "Table View": "Vista de tabla",
+          "Multiple Values": "Valores múltiples",
+          "Default Value": "Valor por defecto",
+          "Drag and Drop a form component": "Arrastrar y soltar un componente",
+          "Text Field": "Campo de Texto",
+          "Email": "Correo electrónico",
+          "Text Area": "Área de texto",
+          "Panel": "Panel",
+          "Time": "Tiempo",
+          "Submit": "Enviar",
+          "Search field(s)": "Buscar componente(s)",
+          "Basic Components": "Componentes básicos",
+          "Layout Components": "Componentes del diseño",
+          "Advanced": "Avanzado",
+          "Hidden": "Oculto",
+          "Component": "Componente",
+          "Display": "Mostrar",
+          "Data": "Datos",
+          "Validation": "Validación",
+          "API": "API",
+          "Conditional": "Condicional",
+          "Logic": "Lógica",
+          "Layout": "Diseño",
+          "Input Field": "Campo de entrada",
+          "Collapsible": "Colapsable",
+          "Preview": "Previsualización",
+          "Required": "Requerido",
+          "Unique": "Único",
+          "Minimum Length": "Longitud mínima",
+          "Maximum Length": "Longitud máxima",
+          "Regular Expression Pattern": "Patrón de expresión regular",
+          "Custom Error Message": "Mensaje de error personalizado",
+          "Custom Validation": "Validación personalizada",
+          "Property Name": "Nombre de la propiedad",
+          "Add Another": "Agregar otro",
+          "Save": "Guardar",
+          "Cancel": "Cancelar",
+          "Remove": "Remover",
+          "Rows": "Filas",
+          "Title": "Título",
+          "Number": "Número",
+          "Use Thousands Separator": "Usar el separador de miles",
+          "Content": "Contenido",
+          "Columns": "Columnas",
+          "Data Grid": "Grilla de datos",
+          "Date / Time": "Fecha / Hora",
+          "Day": "Día",
+          "Currency": "Moneda",
+          "Survey": "Encuesta"
+        };
+
+        return {
+          language: "es",
+          i18n: { es: textos },
+          builder: {
+            basic:    false,
+            advanced: false,
+            layout:   false,
+            data:     false,
+            premium:  false,
+            design:   false,
+            customBasic: {
+              title:   "Componentes Básicos",
+              default: true,
+              weight:  0,
+              components: {
+                textfield: true,
+                textarea:  true,
+                number:    true,
+                checkbox:  true,
+                radio:     true,
+                select:    true,
+                datetime:  true,
+                day:       true,
+                time:      true,
+                currency:  true,
+                survey:    true,
+                datagrid:  true,
+                button:    true
+              }
+            },
+            customLayout: {
+              title:   "Diseño",
+              default: false,
+              weight:  1,
+              components: {
+                content: true,
+                columns: true,
+                panel:   true
+              }
+            }
+          },
+          editForm: {
+            textfield: [
+              { key: "display", components: componentsToHide },
+              { key: "data",    components: componentsToHide },
+              { key: "api",     components: [{ key: "tags", ignore: true }, { key: "properties", ignore: true }] }
+            ],
+            textarea: [
+              { key: "display", components: componentsToHide },
+              { key: "data",    components: componentsToHide }
+            ],
+            number: [
+              { key: "display", components: componentsToHide },
+              { key: "data",    components: componentsToHide }
+            ],
+            checkbox: [
+              { key: "display", components: componentsToHide }
+            ],
+            select: [
+              { key: "display", components: componentsToHide }
+            ]
+          }
+        };
+      }
+
+      function initBuilder(schema) {
+        if (currentForm) {
+          try { currentForm.destroy(); } catch(e) {}
+          document.getElementById('builder').innerHTML = '';
+        }
+        Formio.icons = 'fontawesome';
+        Formio.builder(document.getElementById('builder'), schema || {}, getMenu()).then(function (form) {
+          currentForm = form;
+          form.on('change', function () {
+            var jsonSchema = JSON.stringify(form.schema, null, 4);
+            document.getElementById('jsonSchema').value = jsonSchema;
+            window.top.postMessage({ type: 'RENDER_JSON', value: jsonSchema }, '*');
+          });
+        });
+      }
+
+      // Inicializar builder vacío al cargar
+      initBuilder({});
+
+      window.addEventListener('message', function (e) {
+        if (e.data.type === 'INIT_BUILDER') {
+          var schema = {};
+          if (e.data.value && e.data.value !== '' && e.data.value !== '{}') {
+            try { schema = JSON.parse(e.data.value); } catch(err) { schema = {}; }
+          }
+          initBuilder(schema);
+        }
+        if (e.data.type === 'REQUEST_JSON') {
+          window.top.postMessage({ type: 'RESPONSE_JSON', value: document.getElementById('jsonSchema').value }, '*');
+        }
+      });
+    };
+  </script>
+</body>
+</html>
