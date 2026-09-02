@@ -1,18 +1,19 @@
-import { delay, mockUsuarios } from './mock'
-import type { AuthUser } from '@/types'
+import { http } from './http'
+import type { AuthUser, Resultado } from '@/types'
+
 export const authApi = {
   login: async (login: string, clave: string): Promise<AuthUser> => {
-    await delay(600)
-    const user = mockUsuarios.find((u) => u.login === login)
-    if (!user || clave !== 'bacord2025') throw new Error('Usuario o contraseña incorrectos')
-    return {
-      idUsuario: user.idUsuario, nombres: user.nombres, apellidos: user.apellidos,
-      login: user.login, email: user.email, idCentro: user.idCentro,
-      esAdministrador: user.esAdministrador === 1,
-      roles: user.esAdministrador === 1 ? ['Admin', 'BatchRecord', 'RecetaMaestra'] : ['BatchRecord'],
-      token: `mock-token-${user.idUsuario}`,
-      grupos: user.grupos,
-      idGrupos: user.idGrupos,
-    }
+    const { data } = await http.post<AuthUser>('/auth/login', { login, clave })
+    return data
   },
+  validarFirma: async (login: string, clave: string) => {
+    const { data } = await http.post<{ estado: boolean; mensaje: string }>('/auth/validar-firma', { login, clave })
+    return data
+  },
+  olvideClave: async (email: string): Promise<Resultado> =>
+    (await http.post<Resultado>('/auth/olvide-clave', { email })).data,
+  validarTokenActivacion: async (token: string): Promise<{ valido: boolean; nombre?: string }> =>
+    (await http.get<{ valido: boolean; nombre?: string }>('/auth/activar-cuenta', { params: { token } })).data,
+  activarCuenta: async (token: string, password: string): Promise<Resultado> =>
+    (await http.post<Resultado>('/auth/activar-cuenta', { token, password })).data,
 }

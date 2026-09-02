@@ -3,8 +3,10 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Panel } from '@/components/shared/Panel'
 import { ordenProcesoApi } from '@/api/ordenProceso'
 import { formulaControlApi } from '@/api/formulaControl'
-import { mockFormulasControl, mockRecetas, mockBatchRecords } from '@/api/mock'
-import type { OrdenProceso, ComponenteOrden, FormulaControl, RecetaMaestra } from '@/types'
+import { recetaMaestraApi } from '@/api/recetaMaestra'
+import { batchRecordApi } from '@/api/batchRecord'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import type { OrdenProceso, ComponenteOrden, FormulaControl, RecetaMaestra, BatchRecord } from '@/types'
 
 
 const ESTADO_OP: Record<number, { label: string; bg: string; color: string }> = {
@@ -25,12 +27,14 @@ function MetaItem({ label, value, mono }: { label: string; value: string; mono?:
 }
 
 export function OrdenProcesoDetalle() {
+  const puedeEditarFC = usePuedeEditar('formulas-control')
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [op, setOp] = useState<OrdenProceso | null>(null)
   const [componentes, setComponetes] = useState<ComponenteOrden[]>([])
   const [receta, setReceta] = useState<RecetaMaestra | null>(null)
   const [fcExistente, setFcExistente] = useState<FormulaControl | null>(null)
+  const [brExistente, setBrExistente] = useState<BatchRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [iniciando, setIniciando] = useState(false)
   const [error, setError] = useState('')
@@ -41,13 +45,15 @@ export function OrdenProcesoDetalle() {
     Promise.all([
       ordenProcesoApi.find(idNum),
       ordenProcesoApi.getComponentes(idNum),
-    ]).then(([op, comps]) => {
+      formulaControlApi.buscar(),
+      batchRecordApi.buscar(),
+    ]).then(([op, comps, fcs, brs]) => {
       setOp(op)
       setComponetes(comps)
-      const rm = mockRecetas.find(r => r.idRecetaMaestra === op.idRecetaMaestra) ?? null
-      setReceta(rm)
-      const fc = mockFormulasControl.find(f => f.idOrdenProceso === idNum && f.idEstado !== 3) ?? null
+      recetaMaestraApi.find(op.idRecetaMaestra).then(setReceta).catch(() => setReceta(null))
+      const fc = fcs.find(f => f.idOrdenProceso === idNum && f.idEstado !== 3) ?? null
       setFcExistente(fc)
+      setBrExistente(brs.find(b => b.idOrdenProceso === idNum) ?? null)
     }).finally(() => setLoading(false))
   }, [id])
 
@@ -200,9 +206,6 @@ export function OrdenProcesoDetalle() {
 
         {/* Batch Record */}
         {(() => {
-          const brExistente = fcExistente
-            ? mockBatchRecords.find(b => b.idOrdenProceso === fcExistente.idOrdenProceso) ?? null
-            : null
           const fcEnTratamiento = fcExistente && fcExistente.idEstado === 1 && !brExistente
 
           return (
@@ -257,7 +260,7 @@ export function OrdenProcesoDetalle() {
                       <button
                         className="btn btn-primary"
                         onClick={activarBatchRecord}
-                        disabled={iniciando}
+                        disabled={iniciando || !puedeEditarFC}
                         style={{ fontSize: 13, padding: '9px 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                       >
                         {iniciando
@@ -281,8 +284,8 @@ export function OrdenProcesoDetalle() {
                     <button
                       className="btn btn-primary"
                       onClick={iniciarBatchRecord}
-                      disabled={!receta || iniciando}
-                      title={!receta ? 'Requiere Receta Maestra vinculada' : ''}
+                      disabled={!receta || iniciando || !puedeEditarFC}
+                      title={!puedeEditarFC ? 'No tiene permiso de edición en Fórmulas de Control' : !receta ? 'Requiere Receta Maestra vinculada' : ''}
                       style={{ fontSize: 13, padding: '9px 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                     >
                       {iniciando

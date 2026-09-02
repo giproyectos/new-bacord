@@ -1,13 +1,16 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { DataTable, type Column } from '@/components/shared/DataTable'
-import { mockUsuarios, mockGruposResponsables, getGrupoColor } from '@/api/mock'
-import type { Usuario } from '@/types'
+import { usuariosApi } from '@/api/usuarios'
+import { gruposResponsablesApi } from '@/api/gruposResponsables'
+import { centrosApi, type Centro } from '@/api/centros'
+import { rolesApi } from '@/api/roles'
+import { colorForKey } from '@/utils/colorPalette'
+import type { Usuario, GrupoResponsable, Rol } from '@/types'
 
-const CENTROS: Record<number, string> = { 1: 'Planta Bogotá', 2: 'Planta Medellín' }
-
-function GrupoChip({ nombre }: { nombre: string }) {
+function GrupoChip({ nombre, grupos }: { nombre: string; grupos: GrupoResponsable[] }) {
   if (!nombre) return <span style={{ color: 'var(--ink-4)', fontSize: 12 }}>—</span>
-  const c = getGrupoColor(nombre)
+  const g = grupos.find(x => x.nombre === nombre)
+  const c = colorForKey(g?.colorKey)
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -20,63 +23,82 @@ function GrupoChip({ nombre }: { nombre: string }) {
   )
 }
 
-const EMPTY_FORM = { NumeroIdentificacion: '', Email: '', Nombres: '', Apellidos: '', IdCentro: '1', IdGrupos: '' }
+const EMPTY_FORM = { NumeroIdentificacion: '', Email: '', Login: '', Nombres: '', Apellidos: '', IdCentro: '', IdGrupo: '', IdRol: '', FechaCaducidad: '', EsAdministrador: false }
 
 export function UsuariosList() {
-  const [data, setData]               = useState<Usuario[]>(mockUsuarios)
+  const [data, setData]               = useState<Usuario[]>([])
+  const [grupos, setGrupos]           = useState<GrupoResponsable[]>([])
+  const [centros, setCentros]         = useState<Centro[]>([])
+  const [roles, setRoles]             = useState<Rol[]>([])
+  const [loading, setLoading]         = useState(true)
   const [search, setSearch]           = useState('')
   const [filtroGrupo, setFiltroGrupo] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('0')
   const [modalCrear, setModalCrear]   = useState(false)
   const [editando, setEditando]       = useState<Usuario | null>(null)
-  const [modalPerfiles, setModalPerfiles] = useState<Usuario | null>(null)
   const [form, setForm]               = useState(EMPTY_FORM)
   const [errors, setErrors]           = useState<Record<string, string>>({})
+  const [aviso, setAviso]             = useState('')
+
+  const cargar = () => Promise.all([usuariosApi.listar(), gruposResponsablesApi.listar(), centrosApi.listar(), rolesApi.listar()]).then(([us, gs, cs, rs]) => {
+    setData(us); setGrupos(gs); setCentros(cs); setRoles(rs)
+  }).finally(() => setLoading(false))
+  useEffect(() => { cargar() }, [])
 
   const openCrear = () => {
-    setForm(EMPTY_FORM); setEditando(null); setErrors({}); setModalCrear(true)
+    setForm({ ...EMPTY_FORM, IdCentro: centros[0] ? String(centros[0].id) : '' }); setEditando(null); setErrors({}); setModalCrear(true)
   }
   const openEditar = (r: Usuario) => {
-    setForm({ NumeroIdentificacion: r.numeroIdentificacion, Email: r.email, Nombres: r.nombres, Apellidos: r.apellidos, IdCentro: String(r.idCentro), IdGrupos: r.idGrupos ?? '' })
+    setForm({
+      NumeroIdentificacion: r.numeroIdentificacion, Email: r.email, Login: r.login,
+      Nombres: r.nombres, Apellidos: r.apellidos, IdCentro: String(r.idCentro),
+      IdGrupo: (r.idGrupos ?? '').split(',')[0] ?? '', IdRol: r.idRol ? String(r.idRol) : '',
+      FechaCaducidad: r.fechaCaducidad ? r.fechaCaducidad.slice(0, 10) : '',
+      EsAdministrador: r.esAdministrador === 1,
+    })
     setEditando(r); setErrors({}); setModalCrear(true)
   }
 
-  const handleGuardar = () => {
+  const handleGuardar = async () => {
     const errs: Record<string, string> = {}
     if (!form.NumeroIdentificacion.trim()) errs.NumeroIdentificacion = 'Requerido'
     if (!form.Nombres.trim()) errs.Nombres = 'Requerido'
+    if (!form.Login.trim()) errs.Login = 'Requerido'
     if (!form.Email.trim()) {
       errs.Email = 'Requerido'
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.Email.trim())) {
       errs.Email = 'Correo electrónico inválido'
-    } else {
-      const dup = data.find(u => u.email.toLowerCase() === form.Email.trim().toLowerCase() && u.idUsuario !== editando?.idUsuario)
-      if (dup) errs.Email = 'Ya existe un usuario con este correo'
     }
+    if (!form.IdCentro) errs.IdCentro = 'Seleccione un centro'
+    if (!form.EsAdministrador && !form.IdRol) errs.IdRol = 'Seleccione un rol, o marque Administrador'
     if (Object.keys(errs).length) { setErrors(errs); return }
 
-    const grupoNombre = mockGruposResponsables.find(g => String(g.id) === form.IdGrupos)?.nombre ?? ''
-
-    if (editando) {
-      setData(d => d.map(u => u.idUsuario === editando.idUsuario
-        ? { ...u, numeroIdentificacion: form.NumeroIdentificacion.trim(), email: form.Email.trim(), nombres: form.Nombres.trim(), apellidos: form.Apellidos.trim(), idCentro: Number(form.IdCentro) || 1, idGrupos: form.IdGrupos, grupos: grupoNombre }
-        : u
-      ))
-    } else {
-      const newId = Math.max(0, ...data.map(u => u.idUsuario)) + 1
-      setData(d => [...d, {
-        idUsuario: newId,
-        numeroIdentificacion: form.NumeroIdentificacion.trim(),
-        nombres: form.Nombres.trim(), apellidos: form.Apellidos.trim(),
-        login: form.Email.split('@')[0],
-        email: form.Email.trim(),
-        activo: 1, idCentro: Number(form.IdCentro) || 1,
-        esAdministrador: 0, bloqueado: 0, intentosFallidos: 0,
-        idGrupos: form.IdGrupos, grupos: grupoNombre,
-        fechaCreacion: new Date().toISOString().slice(0, 10),
-      }])
+    const idGrupos = form.IdGrupo ? [Number(form.IdGrupo)] : []
+    const idRol = form.EsAdministrador ? null : (form.IdRol ? Number(form.IdRol) : null)
+    const payload = {
+      numeroIdentificacion: form.NumeroIdentificacion.trim(), email: form.Email.trim(), login: form.Login.trim(),
+      nombres: form.Nombres.trim(), apellidos: form.Apellidos.trim(), idCentro: Number(form.IdCentro),
+      idGrupos, idRol, esAdministrador: form.EsAdministrador,
+      fechaCaducidad: form.FechaCaducidad || null,
     }
+    const res = editando
+      ? await usuariosApi.actualizar(editando.idUsuario, payload)
+      : await usuariosApi.crear(payload)
+    if (!res.estado) { setErrors({ Email: res.mensaje }); return }
     setModalCrear(false); setEditando(null)
+    setAviso(editando ? 'Usuario actualizado.' : 'Usuario creado — se envió un correo de invitación para que defina su contraseña.')
+    cargar()
+  }
+
+  const desbloquear = async (u: Usuario) => { await usuariosApi.desbloquear(u.idUsuario); cargar() }
+  const toggleActivo = async (u: Usuario) => {
+    await usuariosApi.actualizar(u.idUsuario, { activo: !u.activo })
+    cargar()
+  }
+  const reenviarInvitacion = async (u: Usuario) => {
+    const res = await usuariosApi.reenviarInvitacion(u.idUsuario)
+    setAviso(res.mensaje)
+    cargar()
   }
 
   const filtered = useMemo(() => {
@@ -91,25 +113,46 @@ export function UsuariosList() {
   }, [data, search, filtroGrupo, filtroEstado])
 
   const columns: Column<Usuario>[] = [
-    { key: 'numeroIdentificacion', header: 'Documento', width: '12%', sortable: true },
-    { key: 'nombres',              header: 'Nombres',   width: '18%', sortable: true },
-    { key: 'apellidos',            header: 'Apellidos', width: '18%', sortable: true },
+    { key: 'numeroIdentificacion', header: 'Documento', width: '10%', sortable: true },
+    { key: 'nombres',              header: 'Nombres',   width: '13%', sortable: true },
+    { key: 'apellidos',            header: 'Apellidos', width: '13%', sortable: true },
     { key: 'email',                header: 'Email',                   sortable: true },
-    { key: 'grupos',               header: 'Grupo',     width: '14%', render: r => <GrupoChip nombre={r.grupos} /> },
-    { key: 'activo',               header: 'Estado',    width: '8%',
+    { key: 'grupos',               header: 'Grupo',     width: '11%', render: r => <GrupoChip nombre={r.grupos} grupos={grupos} /> },
+    { key: 'rolNombre',            header: 'Rol',       width: '11%', render: r => r.esAdministrador ? <em style={{ color: 'var(--ink-4)', fontSize: 12 }}>Administrador</em> : (r.rolNombre || <span style={{ color: 'var(--ink-4)', fontSize: 12 }}>—</span>) },
+    { key: 'fechaCaducidad',       header: 'Caduca',    width: '9%',
+      render: r => r.fechaCaducidad ? <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.fechaCaducidad.slice(0, 10)}</span> : <span style={{ color: 'var(--ink-4)', fontSize: 12 }}>—</span> },
+    { key: 'activo',               header: 'Estado',    width: '12%',
       render: r => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: r.activo ? '#065F46' : 'var(--ink-4)' }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: r.activo ? '#10B981' : 'var(--hair-2)', flexShrink: 0 }} />
           {r.activo ? 'Activo' : 'Inactivo'}
+          {!!r.bloqueado && <span style={{ marginLeft: 4, color: '#DC2626' }} title="Usuario bloqueado por intentos fallidos"><i className="fa fa-lock" /></span>}
+          {r.activacionPendiente && <span style={{ marginLeft: 4, color: '#D97706' }} title="Aún no ha activado su cuenta"><i className="fa fa-hourglass-half" /></span>}
         </span>
       ),
     },
     {
-      key: '__acc', header: '', width: '7%', align: 'center',
+      key: '__acc', header: '', width: '14%', align: 'center',
       render: r => (
         <div className="dt-act">
           <button className="dt-ab dt-ab-edit" title="Editar" onClick={() => openEditar(r)}><i className="fa fa-pencil-alt" /></button>
-          <button className="dt-ab dt-ab-extra" title="Administrar perfiles" onClick={() => setModalPerfiles(r)}><i className="fa fa-cogs" /></button>
+          {!!r.bloqueado && (
+            <button className="dt-ab dt-ab-extra" title="Desbloquear" onClick={() => desbloquear(r)}><i className="fa fa-unlock" /></button>
+          )}
+          <button
+            className="dt-ab dt-ab-extra"
+            title={r.activacionPendiente ? 'Reenviar invitación' : 'Enviar enlace para restablecer contraseña'}
+            onClick={() => reenviarInvitacion(r)}
+          >
+            <i className="fa fa-envelope" />
+          </button>
+          <button
+            className={`dt-ab ${r.activo ? 'dt-ab-del' : 'dt-ab-extra'}`}
+            title={r.activo ? 'Desactivar usuario' : 'Activar usuario'}
+            onClick={() => toggleActivo(r)}
+          >
+            <i className={`fa ${r.activo ? 'fa-user-slash' : 'fa-user-check'}`} />
+          </button>
         </div>
       ),
     },
@@ -156,9 +199,6 @@ export function UsuariosList() {
         .ul-mhdr-close:hover { background:rgba(255,255,255,.2); }
         .ul-mbody { padding:20px 22px; display:flex; flex-direction:column; gap:14px; }
         .ul-mfoot { padding:14px 22px; border-top:1px solid var(--hair); display:flex; justify-content:flex-end; gap:8px; }
-
-        .ul-perf-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--hair); font-size:13.5px; color:var(--ink-2); cursor:pointer; }
-        .ul-perf-row:last-child { border-bottom:none; }
       `}</style>
 
       {/* Cabecera */}
@@ -170,10 +210,24 @@ export function UsuariosList() {
             <p className="ul-hdr-desc">Gestión de cuentas de usuario y asignación de grupos</p>
           </div>
         </div>
-        <button className="btn btn-primary" onClick={openCrear} style={{ flexShrink: 0 }}>
+        <button className="btn btn-primary" onClick={openCrear} style={{ flexShrink: 0 }} disabled={centros.length === 0}>
           <i className="fa fa-plus" /> Nuevo usuario
         </button>
       </div>
+
+      {centros.length === 0 && !loading && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#FFFBEB', border: '1.5px solid #FCD34D', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#92400E' }}>
+          <i className="fa fa-exclamation-triangle" style={{ marginRight: 6 }} />
+          Primero crea un centro en el catálogo de Centros — cada usuario debe pertenecer a uno.
+        </div>
+      )}
+
+      {aviso && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#ECFDF5', border: '1.5px solid #A7F3D0', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#065F46', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span><i className="fa fa-check-circle" style={{ marginRight: 6 }} />{aviso}</span>
+          <button onClick={() => setAviso('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#065F46' }}>×</button>
+        </div>
+      )}
 
       {/* Tabla */}
       <div className="ul-card">
@@ -184,7 +238,7 @@ export function UsuariosList() {
           </div>
           <select className="ul-sel" value={filtroGrupo} onChange={e => setFiltroGrupo(e.target.value)}>
             <option value="">Todos los grupos</option>
-            {mockGruposResponsables.map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
+            {grupos.map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
           </select>
           <select className="ul-sel" value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}>
             <option value="0">Todos los estados</option>
@@ -201,7 +255,7 @@ export function UsuariosList() {
           </span>
         </div>
         <div className="ul-table-body">
-          <DataTable<Usuario> columns={columns} data={filtered} emptyMessage="No hay usuarios que coincidan con los filtros" />
+          <DataTable<Usuario> columns={columns} data={filtered} loading={loading} emptyMessage="No hay usuarios que coincidan con los filtros" />
         </div>
       </div>
 
@@ -218,17 +272,25 @@ export function UsuariosList() {
               <button className="ul-mhdr-close" onClick={() => { setModalCrear(false); setEditando(null) }}>×</button>
             </div>
             <div className="ul-mbody">
+              {!editando && (
+                <div style={{ padding: '8px 12px', background: '#EFF6FF', border: '1.5px solid #BFDBFE', borderRadius: 'var(--r-sm)', fontSize: 12, color: '#1D4ED8' }}>
+                  <i className="fa fa-info-circle" style={{ marginRight: 6 }} />
+                  Se enviará un correo a este usuario para que defina su propia contraseña — no se establece aquí.
+                </div>
+              )}
               <div className="ul-grid2">
                 {([
-                  { key: 'Nombres',              label: 'Nombres',   req: true },
-                  { key: 'Apellidos',            label: 'Apellidos', req: true },
-                  { key: 'NumeroIdentificacion', label: 'N° Documento', req: true },
-                  { key: 'Email',                label: 'Email',     req: true },
-                ] as { key: string; label: string; req: boolean }[]).map(f => (
+                  { key: 'Nombres',              label: 'Nombres' },
+                  { key: 'Apellidos',            label: 'Apellidos' },
+                  { key: 'NumeroIdentificacion', label: 'N° Documento' },
+                  { key: 'Email',                label: 'Email' },
+                  { key: 'Login',                label: 'Login' },
+                ] as { key: string; label: string }[]).map(f => (
                   <div key={f.key} className={`ul-field${errors[f.key] ? ' has-err' : ''}`}>
-                    <label>{f.label}{f.req && <span style={{ color: 'var(--orange)', marginLeft: 3 }}>*</span>}</label>
+                    <label>{f.label}<span style={{ color: 'var(--orange)', marginLeft: 3 }}>*</span></label>
                     <input
-                      value={form[f.key as keyof typeof form]}
+                      type="text"
+                      value={form[f.key as keyof typeof form] as string}
                       onChange={e => { setForm(v => ({ ...v, [f.key]: e.target.value })); setErrors(err => ({ ...err, [f.key]: '' })) }}
                     />
                     {errors[f.key] && <div className="ul-field-err"><i className="fa fa-exclamation-circle" />{errors[f.key]}</div>}
@@ -236,52 +298,51 @@ export function UsuariosList() {
                 ))}
               </div>
               <div className="ul-grid2">
-                <div className="ul-field">
-                  <label>Centro</label>
+                <div className={`ul-field${errors.IdCentro ? ' has-err' : ''}`}>
+                  <label>Centro <span style={{ color: 'var(--orange)' }}>*</span></label>
                   <select value={form.IdCentro} onChange={e => setForm(v => ({ ...v, IdCentro: e.target.value }))}>
-                    {Object.entries(CENTROS).map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+                    <option value="">— Seleccione —</option>
+                    {centros.map(c => <option key={c.id} value={String(c.id)}>{c.descripcion}</option>)}
                   </select>
+                  {errors.IdCentro && <div className="ul-field-err"><i className="fa fa-exclamation-circle" />{errors.IdCentro}</div>}
                 </div>
                 <div className="ul-field">
                   <label>Grupo responsable</label>
-                  <select value={form.IdGrupos} onChange={e => setForm(v => ({ ...v, IdGrupos: e.target.value }))}>
+                  <select value={form.IdGrupo} onChange={e => setForm(v => ({ ...v, IdGrupo: e.target.value }))}>
                     <option value="">— Sin grupo —</option>
-                    {mockGruposResponsables.map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
+                    {grupos.map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
                   </select>
                 </div>
               </div>
+              <div className="ul-grid2">
+                {!form.EsAdministrador && (
+                  <div className={`ul-field${errors.IdRol ? ' has-err' : ''}`}>
+                    <label>Rol <span style={{ color: 'var(--orange)' }}>*</span></label>
+                    <select value={form.IdRol} onChange={e => { setForm(v => ({ ...v, IdRol: e.target.value })); setErrors(err => ({ ...err, IdRol: '' })) }}>
+                      <option value="">— Seleccione —</option>
+                      {roles.map(r => <option key={r.id} value={String(r.id)}>{r.nombre}</option>)}
+                    </select>
+                    {errors.IdRol && <div className="ul-field-err"><i className="fa fa-exclamation-circle" />{errors.IdRol}</div>}
+                  </div>
+                )}
+                <div className="ul-field">
+                  <label>Fecha de caducidad <span style={{ color: 'var(--ink-4)', fontWeight: 400, textTransform: 'none' }}>(opcional)</span></label>
+                  <input type="date" value={form.FechaCaducidad} onChange={e => setForm(v => ({ ...v, FechaCaducidad: e.target.value }))} />
+                </div>
+              </div>
+              {!form.EsAdministrador && roles.length === 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--ink-4)' }}>
+                  Aún no hay roles creados — ve a Administración › Roles para crear uno primero, o marca este usuario como Administrador.
+                </div>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-2)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={form.EsAdministrador} onChange={e => setForm(v => ({ ...v, EsAdministrador: e.target.checked, IdRol: e.target.checked ? '' : v.IdRol }))} />
+                Administrador del sistema (acceso total, sin restricción por rol)
+              </label>
             </div>
             <div className="ul-mfoot">
               <button className="btn btn-gray" onClick={() => { setModalCrear(false); setEditando(null) }}><i className="fa fa-undo" /> Cancelar</button>
               <button className="btn btn-primary" onClick={handleGuardar}><i className="fa fa-check" /> {editando ? 'Guardar cambios' : 'Crear usuario'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal perfiles */}
-      {modalPerfiles && (
-        <div className="ul-mo" onClick={() => setModalPerfiles(null)}>
-          <div className="ul-mbox" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
-            <div className="ul-mhdr">
-              <div className="ul-mhdr-icon"><i className="fa fa-cogs" /></div>
-              <div>
-                <div className="ul-mhdr-title">Perfiles asignados</div>
-                <div className="ul-mhdr-sub">{modalPerfiles.nombres} {modalPerfiles.apellidos}</div>
-              </div>
-              <button className="ul-mhdr-close" onClick={() => setModalPerfiles(null)}>×</button>
-            </div>
-            <div className="ul-mbody" style={{ gap: 0 }}>
-              {['Administrador', 'Operador', 'Calidad', 'Supervisor', 'BatchRecord'].map(rol => (
-                <label key={rol} className="ul-perf-row">
-                  <input type="checkbox" defaultChecked={rol === 'Administrador' && modalPerfiles.email.includes('admin')} />
-                  {rol}
-                </label>
-              ))}
-            </div>
-            <div className="ul-mfoot">
-              <button className="btn btn-gray" onClick={() => setModalPerfiles(null)}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-primary" onClick={() => setModalPerfiles(null)}><i className="fa fa-check" /> Guardar</button>
             </div>
           </div>
         </div>

@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import {
-  mockRecetas, mockMateriales, mockProcesosGlobal,
-  mockDetallesCatalogo, mockRecetaEstructuras, mockEstrategiasFirma,
-  type RecetaEstructura, type RecetaProcesoItem, type RecetaDetalleItem,
-} from '@/api/mock'
+import { recetaMaestraApi } from '@/api/recetaMaestra'
+import { materialesApi, type Material } from '@/api/materiales'
+import { procesosApi, type ProcesoItem } from '@/api/procesos'
+import { detallesApi, type DetalleApi } from '@/api/detalles'
+import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import type { RecetaMaestra, EstrategiaFirma } from '@/types'
 
 const estadoLabel: Record<number, { text: string; bg: string; color: string }> = {
   1: { text: 'Activo',    bg: '#D1FAE5', color: '#065F46' },
@@ -15,11 +17,11 @@ const estadoLabel: Record<number, { text: string; bg: string; color: string }> =
   6: { text: 'Rechazado', bg: '#FEE2E2', color: '#991B1B' },
 }
 
-let _nextId = 1000
+// Estructura local — misma forma que espera el backend en /estructura, más un `id` local para React keys.
+interface DetalleItem { id: number; idDetalle: number; orden: number }
+interface ProcesoItemEst { id: number; idProceso: number; orden: number; detalles: DetalleItem[] }
 
-function cloneEstructura(e: RecetaEstructura): RecetaEstructura {
-  return JSON.parse(JSON.stringify(e))
-}
+let _nextId = -1 // ids locales negativos para pasos/detalles nuevos aún no guardados
 
 function swap<T>(arr: T[], i: number, j: number): T[] {
   const n = [...arr]
@@ -28,94 +30,130 @@ function swap<T>(arr: T[], i: number, j: number): T[] {
 }
 
 export function RecetaMaestraEditor() {
+  const puedeEditar = usePuedeEditar('recetas-maestras')
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const idNum = Number(id)
 
-  const receta = mockRecetas.find(r => r.idRecetaMaestra === idNum)
-  const existing = mockRecetaEstructuras.find(e => e.idRecetaMaestra === idNum)
-    ?? { idRecetaMaestra: idNum, idMaterial: 0, procesos: [] }
+  const [receta, setReceta] = useState<RecetaMaestra | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [procesos, setProcesos] = useState<ProcesoItemEst[]>([])
+  const [openIds, setOpenIds] = useState<Set<number>>(new Set())
+  const [material, setMaterial] = useState<Material | null>(null)
+  const [procesosCatalogo, setProcesosCatalogo] = useState<ProcesoItem[]>([])
+  const [detallesCatalogo, setDetallesCatalogo] = useState<DetalleApi[]>([])
+  const [estrategias, setEstrategias] = useState<EstrategiaFirma[]>([])
 
-  const [est, setEst]           = useState<RecetaEstructura>(cloneEstructura(existing))
-  const [openIds, setOpenIds]   = useState<Set<number>>(() => new Set(existing.procesos.map(p => p.id)))
-  const [saved, setSaved]       = useState(false)
-  const [modalPaso, setModalPaso]       = useState(false)
-  const [modalDetalle, setModalDetalle] = useState<RecetaProcesoItem | null>(null)
-  const [warnPaso, setWarnPaso]         = useState<RecetaProcesoItem | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [modalPaso, setModalPaso] = useState(false)
+  const [modalDetalle, setModalDetalle] = useState<ProcesoItemEst | null>(null)
+  const [warnPaso, setWarnPaso] = useState<ProcesoItemEst | null>(null)
 
-  const material = mockMateriales.find(m => m.id === est.idMaterial)
-  const procesosDisponibles = mockProcesosGlobal.filter(p =>
-    p.idMaterial === est.idMaterial &&
-    !est.procesos.some(ep => ep.idProceso === p.id)
-  )
+  useEffect(() => {
+    if (!idNum) return
+    Promise.all([
+      recetaMaestraApi.find(idNum),
+      recetaMaestraApi.getEstructura(idNum),
+      detallesApi.listar(),
+      estrategiasFirmaApi.listar(),
+    ]).then(async ([r, est, dets, efs]) => {
+      setReceta(r)
+      setDetallesCatalogo(dets)
+      setEstrategias(efs)
+      const mats = await materialesApi.listar()
+      const mat = mats.find(m => String(m.id) === r.idMateriales) ?? null
+      setMaterial(mat)
+      if (mat) setProcesosCatalogo(await procesosApi.listar(mat.id))
 
-  const toggleOpen = (id: number) =>
-    setOpenIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+      const mapped: ProcesoItemEst[] = est.procesos.map(p => ({
+        id: p.id, idProceso: p.idProceso, orden: p.orden,
+        detalles: p.detalles.map(d => ({ id: d.id, idDetalle: d.idDetalle, orden: d.orden })),
+      }))
+      setProcesos(mapped)
+      setOpenIds(new Set(mapped.map(p => p.id)))
+    }).finally(() => setLoading(false))
+  }, [idNum])
+
+  const procesosDisponibles = procesosCatalogo.filter(p => !procesos.some(ep => ep.idProceso === p.id))
+
+  const toggleOpen = (pid: number) =>
+    setOpenIds(s => { const n = new Set(s); n.has(pid) ? n.delete(pid) : n.add(pid); return n })
 
   // ── Procesos ──────────────────────────────────────────────────────────────
   const agregarPaso = (idProceso: number) => {
-    const maxOrden = Math.max(0, ...est.procesos.map(p => p.orden))
-    const nuevo: RecetaProcesoItem = { id: ++_nextId, idProceso, orden: maxOrden + 1, detalles: [] }
-    setEst(e => ({ ...e, procesos: [...e.procesos, nuevo].sort((a, b) => a.orden - b.orden) }))
+    const maxOrden = Math.max(0, ...procesos.map(p => p.orden))
+    const nuevo: ProcesoItemEst = { id: _nextId--, idProceso, orden: maxOrden + 1, detalles: [] }
+    setProcesos(ps => [...ps, nuevo].sort((a, b) => a.orden - b.orden))
     setOpenIds(s => new Set(s).add(nuevo.id))
     setModalPaso(false)
   }
 
-  const eliminarPaso = (rp: RecetaProcesoItem) => {
-    setEst(e => ({ ...e, procesos: e.procesos.filter(p => p.id !== rp.id) }))
+  const eliminarPaso = (rp: ProcesoItemEst) => {
+    setProcesos(ps => ps.filter(p => p.id !== rp.id))
     setWarnPaso(null)
   }
 
   const moverPaso = (idx: number, dir: -1 | 1) => {
-    setEst(e => {
-      const sorted = [...e.procesos].sort((a, b) => a.orden - b.orden)
+    setProcesos(ps => {
+      const sorted = [...ps].sort((a, b) => a.orden - b.orden)
       const swapped = swap(sorted, idx, idx + dir)
-      return { ...e, procesos: swapped.map((p, i) => ({ ...p, orden: i + 1 })) }
+      return swapped.map((p, i) => ({ ...p, orden: i + 1 }))
     })
   }
 
   // ── Detalles ──────────────────────────────────────────────────────────────
-  const agregarDetalle = (rp: RecetaProcesoItem, idDetalle: number) => {
+  const agregarDetalle = (rp: ProcesoItemEst, idDetalle: number) => {
     const maxOrden = Math.max(0, ...rp.detalles.map(d => d.orden))
-    const nuevo: RecetaDetalleItem = { id: ++_nextId, idDetalle, orden: maxOrden + 1 }
-    setEst(e => ({
-      ...e,
-      procesos: e.procesos.map(p =>
-        p.id === rp.id ? { ...p, detalles: [...p.detalles, nuevo] } : p
-      ),
-    }))
+    const nuevo: DetalleItem = { id: _nextId--, idDetalle, orden: maxOrden + 1 }
+    setProcesos(ps => ps.map(p => p.id === rp.id ? { ...p, detalles: [...p.detalles, nuevo] } : p))
     setModalDetalle(null)
   }
 
   const eliminarDetalle = (rpId: number, rdId: number) => {
-    setEst(e => ({
-      ...e,
-      procesos: e.procesos.map(p =>
-        p.id === rpId ? { ...p, detalles: p.detalles.filter(d => d.id !== rdId) } : p
-      ),
-    }))
+    setProcesos(ps => ps.map(p => p.id === rpId ? { ...p, detalles: p.detalles.filter(d => d.id !== rdId) } : p))
   }
 
   const moverDetalle = (rpId: number, idx: number, dir: -1 | 1) => {
-    setEst(e => ({
-      ...e,
-      procesos: e.procesos.map(p => {
-        if (p.id !== rpId) return p
-        const sorted = [...p.detalles].sort((a, b) => a.orden - b.orden)
-        const swapped = swap(sorted, idx, idx + dir)
-        return { ...p, detalles: swapped.map((d, i) => ({ ...d, orden: i + 1 })) }
-      }),
+    setProcesos(ps => ps.map(p => {
+      if (p.id !== rpId) return p
+      const sorted = [...p.detalles].sort((a, b) => a.orden - b.orden)
+      const swapped = swap(sorted, idx, idx + dir)
+      return { ...p, detalles: swapped.map((d, i) => ({ ...d, orden: i + 1 })) }
     }))
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────
-  const guardar = () => {
-    const idx = mockRecetaEstructuras.findIndex(e => e.idRecetaMaestra === idNum)
-    if (idx !== -1) mockRecetaEstructuras[idx] = cloneEstructura(est)
-    else mockRecetaEstructuras.push(cloneEstructura(est))
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2500)
+  const guardar = async () => {
+    setSaving(true)
+    try {
+      const payload = procesos.map(p => ({
+        idProceso: p.idProceso, orden: p.orden,
+        detalles: p.detalles.map(d => ({ idDetalle: d.idDetalle, orden: d.orden })),
+      }))
+      const res = await recetaMaestraApi.guardarEstructura(idNum, payload)
+      if (res.estado) {
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2500)
+        // Re-fetch para reemplazar ids locales negativos por los ids reales asignados por el backend.
+        const est = await recetaMaestraApi.getEstructura(idNum)
+        const mapped: ProcesoItemEst[] = est.procesos.map(p => ({
+          id: p.id, idProceso: p.idProceso, orden: p.orden,
+          detalles: p.detalles.map(d => ({ id: d.id, idDetalle: d.idDetalle, orden: d.orden })),
+        }))
+        setProcesos(mapped)
+        setOpenIds(new Set(mapped.map(p => p.id)))
+      }
+    } finally {
+      setSaving(false)
+    }
   }
+
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
+      <i className="fa fa-spinner fa-spin" style={{ fontSize: 20, color: 'var(--ink-4)' }} />
+    </div>
+  )
 
   if (!receta) return (
     <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}>
@@ -124,7 +162,7 @@ export function RecetaMaestraEditor() {
     </div>
   )
 
-  const sortedProcesos = [...est.procesos].sort((a, b) => a.orden - b.orden)
+  const sortedProcesos = [...procesos].sort((a, b) => a.orden - b.orden)
   const estado = estadoLabel[receta.idEstado] ?? estadoLabel[1]
 
   return (
@@ -143,8 +181,6 @@ export function RecetaMaestraEditor() {
         .rme-info-name { font-size:15px; font-weight:700; color:var(--ink); }
         .rme-info-sub  { font-size:12.5px; color:var(--ink-4); margin-top:2px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
         .rme-info-pill { font-family:var(--f-mono); font-size:11px; font-weight:700; color:#4F46E5; background:#EEF2FF; padding:2px 8px; border-radius:4px; }
-        .rme-mat-sel { flex:1; max-width:320px; padding:7px 12px; border:1.5px solid var(--hair-2); border-radius:var(--r-sm); font-size:13px; font-family:var(--f-sans); color:var(--ink); outline:none; background:#fff; }
-        .rme-mat-sel:focus { border-color:var(--navy); }
 
         .rme-section { background:#fff; border-radius:var(--r-md); border:1.5px solid var(--hair-2); box-shadow:0 1px 4px rgba(0,0,0,0.04); overflow:hidden; }
         .rme-section-hdr { display:flex; align-items:center; gap:10px; padding:13px 18px; background:#FAFBFC; border-bottom:1.5px solid var(--hair-2); }
@@ -221,9 +257,11 @@ export function RecetaMaestraEditor() {
         <span className="rme-title">{receta.codigo} · {receta.descripcion}</span>
         <span className="rme-badge" style={{ background: estado.bg, color: estado.color }}>{estado.text}</span>
         <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'var(--ink-4)', background: 'var(--paper-2)', border: '1px solid var(--hair-2)', padding: '2px 8px', borderRadius: 4 }}>{receta.version}</span>
-        <button className="btn btn-primary rme-save" onClick={guardar}>
-          <i className="fa fa-save" /> Guardar cambios
-        </button>
+        {puedeEditar && (
+          <button className="btn btn-primary rme-save" onClick={guardar} disabled={saving}>
+            {saving ? <><i className="fa fa-spinner fa-spin" /> Guardando...</> : <><i className="fa fa-save" /> Guardar cambios</>}
+          </button>
+        )}
       </div>
 
       {/* ── Info card ── */}
@@ -238,15 +276,6 @@ export function RecetaMaestraEditor() {
               : <span style={{ color: 'var(--orange)', fontWeight: 600 }}>Sin material asignado</span>}
           </div>
         </div>
-        {!material && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>Producto:</label>
-            <select className="rme-mat-sel" value={est.idMaterial || ''} onChange={e => setEst(x => ({ ...x, idMaterial: Number(e.target.value), procesos: [] }))}>
-              <option value="">— Seleccione —</option>
-              {mockMateriales.map(m => <option key={m.id} value={m.id}>{m.descripcion} ({m.codigo})</option>)}
-            </select>
-          </div>
-        )}
       </div>
 
       {/* ── Accordion de procesos ── */}
@@ -267,8 +296,8 @@ export function RecetaMaestraEditor() {
         {sortedProcesos.length === 0 ? (
           <div className="rme-empty-pasos">
             <i className="fa fa-sitemap" />
-            <p>{est.idMaterial ? 'No hay pasos definidos. Agrega el primer paso de proceso.' : 'Primero selecciona el producto en la tarjeta de información.'}</p>
-            {est.idMaterial > 0 && (
+            <p>{procesosCatalogo.length > 0 ? 'No hay pasos definidos. Agrega el primer paso de proceso.' : `Primero crea procesos para "${material?.descripcion ?? 'este producto'}" en el catálogo de Procesos.`}</p>
+            {puedeEditar && procesosCatalogo.length > 0 && (
               <button className="btn btn-primary" onClick={() => setModalPaso(true)}>
                 <i className="fa fa-plus" /> Agregar primer paso
               </button>
@@ -277,7 +306,7 @@ export function RecetaMaestraEditor() {
         ) : (
           <>
             {sortedProcesos.map((rp, idx) => {
-              const proceso = mockProcesosGlobal.find(p => p.id === rp.idProceso)
+              const proceso = procesosCatalogo.find(p => p.id === rp.idProceso)
               const isOpen = openIds.has(rp.id)
               const sortedDets = [...rp.detalles].sort((a, b) => a.orden - b.orden)
               return (
@@ -290,9 +319,13 @@ export function RecetaMaestraEditor() {
                     <span className="rme-det-count">
                       {rp.detalles.length > 0 ? `${rp.detalles.length} form.` : 'Sin formularios'}
                     </span>
-                    <button className="rme-iab" title="Subir" disabled={idx === 0} onClick={e => { e.stopPropagation(); moverPaso(idx, -1) }}><i className="fa fa-chevron-up" /></button>
-                    <button className="rme-iab" title="Bajar" disabled={idx === sortedProcesos.length - 1} onClick={e => { e.stopPropagation(); moverPaso(idx, 1) }}><i className="fa fa-chevron-down" /></button>
-                    <button className="rme-iab del" title="Eliminar paso" onClick={e => { e.stopPropagation(); setWarnPaso(rp) }}><i className="fa fa-times" /></button>
+                    {puedeEditar && (
+                      <>
+                        <button className="rme-iab" title="Subir" disabled={idx === 0} onClick={e => { e.stopPropagation(); moverPaso(idx, -1) }}><i className="fa fa-chevron-up" /></button>
+                        <button className="rme-iab" title="Bajar" disabled={idx === sortedProcesos.length - 1} onClick={e => { e.stopPropagation(); moverPaso(idx, 1) }}><i className="fa fa-chevron-down" /></button>
+                        <button className="rme-iab del" title="Eliminar paso" onClick={e => { e.stopPropagation(); setWarnPaso(rp) }}><i className="fa fa-times" /></button>
+                      </>
+                    )}
                   </div>
 
                   {isOpen && (
@@ -303,23 +336,29 @@ export function RecetaMaestraEditor() {
                         </p>
                       )}
                       {sortedDets.map((rd, di) => {
-                        const det = mockDetallesCatalogo.find(d => d.id === rd.idDetalle)
-                        const ef = det?.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === det.idEstrategiaFirma) : null
+                        const det = detallesCatalogo.find(d => d.id === rd.idDetalle)
+                        const ef = det?.idEstrategiaFirma ? estrategias.find(e => e.id === det.idEstrategiaFirma) : null
                         return (
                           <div key={rd.id} className="rme-det-row">
                             <div className="rme-det-ico"><i className="fa fa-wpforms" /></div>
                             <span className="rme-det-code">{det?.codigo ?? '—'}</span>
                             <span className="rme-det-name">{det?.descripcion ?? '—'}</span>
                             {ef && <span className="rme-ef-chip">{ef.codigo}</span>}
-                            <button className="rme-iab" title="Subir" disabled={di === 0} onClick={() => moverDetalle(rp.id, di, -1)}><i className="fa fa-chevron-up" /></button>
-                            <button className="rme-iab" title="Bajar" disabled={di === sortedDets.length - 1} onClick={() => moverDetalle(rp.id, di, 1)}><i className="fa fa-chevron-down" /></button>
-                            <button className="rme-iab del" title="Quitar formulario" onClick={() => eliminarDetalle(rp.id, rd.id)}><i className="fa fa-times" /></button>
+                            {puedeEditar && (
+                              <>
+                                <button className="rme-iab" title="Subir" disabled={di === 0} onClick={() => moverDetalle(rp.id, di, -1)}><i className="fa fa-chevron-up" /></button>
+                                <button className="rme-iab" title="Bajar" disabled={di === sortedDets.length - 1} onClick={() => moverDetalle(rp.id, di, 1)}><i className="fa fa-chevron-down" /></button>
+                                <button className="rme-iab del" title="Quitar formulario" onClick={() => eliminarDetalle(rp.id, rd.id)}><i className="fa fa-times" /></button>
+                              </>
+                            )}
                           </div>
                         )
                       })}
-                      <button className="rme-add-det-btn" onClick={() => setModalDetalle(rp)}>
-                        <i className="fa fa-plus" /> Agregar formulario a este paso
-                      </button>
+                      {puedeEditar && (
+                        <button className="rme-add-det-btn" onClick={() => setModalDetalle(rp)}>
+                          <i className="fa fa-plus" /> Agregar formulario a este paso
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -328,7 +367,7 @@ export function RecetaMaestraEditor() {
           </>
         )}
 
-        {est.idMaterial > 0 && (
+        {puedeEditar && procesosCatalogo.length > 0 && (
           <button className="rme-add-paso-btn" onClick={() => setModalPaso(true)}>
             <i className="fa fa-plus-circle" /> Agregar paso de proceso
           </button>
@@ -375,7 +414,7 @@ export function RecetaMaestraEditor() {
       {/* ── Modal: Agregar formulario ── */}
       {modalDetalle && (() => {
         const yaAsignados = new Set(modalDetalle.detalles.map(d => d.idDetalle))
-        const disponibles = mockDetallesCatalogo.filter(d => !yaAsignados.has(d.id))
+        const disponibles = detallesCatalogo.filter(d => !yaAsignados.has(d.id) && d.estado === 'Activo')
         return (
           <div className="rme-mo" onClick={() => setModalDetalle(null)}>
             <div className="rme-mbox" onClick={e => e.stopPropagation()}>
@@ -384,17 +423,17 @@ export function RecetaMaestraEditor() {
                 <div>
                   <div className="rme-mhdr-title">Agregar formulario</div>
                   <div className="rme-mhdr-sub">
-                    Paso: {mockProcesosGlobal.find(p => p.id === modalDetalle.idProceso)?.descripcion}
+                    Paso: {procesosCatalogo.find(p => p.id === modalDetalle.idProceso)?.descripcion}
                   </div>
                 </div>
                 <button className="rme-mhdr-close" onClick={() => setModalDetalle(null)}>×</button>
               </div>
               <div className="rme-mlist">
                 {disponibles.length === 0 ? (
-                  <div className="rme-empty-modal">Todos los formularios ya están asignados a este paso.</div>
+                  <div className="rme-empty-modal">Todos los formularios ya están asignados a este paso, o no hay formularios en el catálogo de Detalles.</div>
                 ) : (
                   disponibles.map(d => {
-                    const ef = d.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === d.idEstrategiaFirma) : null
+                    const ef = d.idEstrategiaFirma ? estrategias.find(e => e.id === d.idEstrategiaFirma) : null
                     return (
                       <div key={d.id} className="rme-mitem" onClick={() => agregarDetalle(modalDetalle, d.id)}>
                         <span className="rme-mitem-code">{d.codigo}</span>
@@ -425,7 +464,7 @@ export function RecetaMaestraEditor() {
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', marginBottom: 6 }}>¿Quitar este paso?</div>
                 <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>
-                  Se quitará <strong>{mockProcesosGlobal.find(p => p.id === warnPaso.idProceso)?.descripcion}</strong> y sus {warnPaso.detalles.length} formulario{warnPaso.detalles.length !== 1 ? 's' : ''} asignado{warnPaso.detalles.length !== 1 ? 's' : ''}.
+                  Se quitará <strong>{procesosCatalogo.find(p => p.id === warnPaso.idProceso)?.descripcion}</strong> y sus {warnPaso.detalles.length} formulario{warnPaso.detalles.length !== 1 ? 's' : ''} asignado{warnPaso.detalles.length !== 1 ? 's' : ''}.
                 </div>
               </div>
             </div>

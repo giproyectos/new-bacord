@@ -3,15 +3,20 @@ export interface Resultado<T = unknown> {
 }
 export interface AuthUser {
   idUsuario: number; nombres: string; apellidos: string; login: string
-  email: string; idCentro: number; esAdministrador: boolean
-  roles: string[]; token?: string
+  email: string; idCentro: number | null; esAdministrador: boolean
+  roles: string[]; modulos: string[]; moduloEdicion: string[]; token?: string
   grupos?: string; idGrupos?: string
 }
 export interface Usuario {
   idUsuario: number; numeroIdentificacion: string; nombres: string; apellidos: string
   login: string; email: string; activo: number; idCentro: number
   esAdministrador: number; bloqueado: number; intentosFallidos: number
+  idRol: number | null; rolNombre: string
+  fechaCaducidad: string | null; activacionPendiente: boolean
   grupos: string; idGrupos: string; fechaCreacion: string
+}
+export interface Rol {
+  id: number; nombre: string; descripcion: string; modulos: string[]; modulosEdicion: string[]; activo: boolean; creadoEn: string
 }
 export interface RecetaMaestra {
   idRecetaMaestra: number; codigo: string; descripcion: string; version: string

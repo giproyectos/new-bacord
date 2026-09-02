@@ -1,9 +1,9 @@
-import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
-import { mockEstrategiasFirma, mockFirmas } from '@/api/mock'
-import { GRUPOS } from '@/types'
+import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
+import { firmasApi, type FirmaApi } from '@/api/firmas'
+import { usePuedeEditar } from '@/hooks/usePermisos'
 import type { EstrategiaFirma, EstrategiaFirmaItem } from '@/types'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -26,8 +26,9 @@ function grupoBadge(grupo: string) {
 
 // ── FirmasModal ───────────────────────────────────────────────────────────────
 
-function FirmasModal({ estrategia, onClose, onSave }: {
+function FirmasModal({ estrategia, firmasCatalogo, onClose, onSave }: {
   estrategia: EstrategiaFirma
+  firmasCatalogo: FirmaApi[]
   onClose: () => void
   onSave: (items: EstrategiaFirmaItem[]) => void
 }) {
@@ -35,12 +36,12 @@ function FirmasModal({ estrategia, onClose, onSave }: {
     estrategia.firmas.map(f => ({ ...f })).sort((a, b) => a.orden - b.orden)
   )
 
-  const firmasDisponibles = mockFirmas.filter(
+  const firmasDisponibles = firmasCatalogo.filter(
     f => f.activo && !items.find(i => i.idFirma === f.idFirma)
   )
 
   const agregar = (idFirma: number) => {
-    const firma = mockFirmas.find(f => f.idFirma === idFirma)
+    const firma = firmasCatalogo.find(f => f.idFirma === idFirma)
     if (!firma) return
     setItems(prev => [
       ...prev,
@@ -48,7 +49,7 @@ function FirmasModal({ estrategia, onClose, onSave }: {
         idFirma: firma.idFirma,
         codigo: firma.codigo,
         texto: firma.descripcion,
-        grupo: GRUPOS[firma.idGrupo] ?? 'Sin grupo',
+        grupo: firma.grupo?.nombre ?? 'Sin grupo',
         orden: prev.length + 1,
         activo: true,
       },
@@ -201,7 +202,7 @@ function FirmasModal({ estrategia, onClose, onSave }: {
                         <span style={{ fontSize: 11, color: 'var(--ink-4)', fontFamily: 'var(--f-mono)' }}>
                           {f.codigo}
                         </span>
-                        {grupoBadge(GRUPOS[f.idGrupo] ?? 'Sin grupo')}
+                        {grupoBadge(f.grupo?.nombre ?? 'Sin grupo')}
                       </div>
                     </div>
                     <button onClick={() => agregar(f.idFirma)}
@@ -232,43 +233,47 @@ function FirmasModal({ estrategia, onClose, onSave }: {
 // ── EstrategiaFirmasList ──────────────────────────────────────────────────────
 
 export function EstrategiaFirmasList() {
-  const [data, setData] = useState<EstrategiaFirma[]>(mockEstrategiasFirma)
+  const puedeEditar = usePuedeEditar('estrategias-firma')
+  const [data, setData] = useState<EstrategiaFirma[]>([])
+  const [firmasCatalogo, setFirmasCatalogo] = useState<FirmaApi[]>([])
+  const [loading, setLoading] = useState(true)
   const [firmasModal, setFirmasModal] = useState<EstrategiaFirma | null>(null)
   const [modalCrear, setModalCrear] = useState(false)
   const [editando, setEditando] = useState<EstrategiaFirma | null>(null)
   const [form, setForm] = useState({ codigo: '', descripcion: '' })
 
+  const cargar = () => Promise.all([estrategiasFirmaApi.listar(), firmasApi.listar()]).then(([efs, firmas]) => {
+    setData(efs)
+    setFirmasCatalogo(firmas)
+  }).finally(() => setLoading(false))
+  useEffect(() => { cargar() }, [])
+
   const openCrear = () => { setForm({ codigo: '', descripcion: '' }); setEditando(null); setModalCrear(true) }
   const openEditar = (r: EstrategiaFirma) => { setForm({ codigo: r.codigo, descripcion: r.descripcion }); setEditando(r); setModalCrear(true) }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.codigo.trim() || !form.descripcion.trim()) return
     if (editando) {
-      // Sincronizar con el array del módulo para que otros componentes lo vean
-      const idx = mockEstrategiasFirma.findIndex(x => x.id === editando.id)
-      if (idx >= 0) Object.assign(mockEstrategiasFirma[idx], form)
-      setData(d => d.map(x => x.id === editando.id ? { ...x, ...form } : x))
+      await estrategiasFirmaApi.actualizar(editando.id, form)
     } else {
-      const newId = Math.max(0, ...data.map(d => d.id)) + 1
-      const nueva: EstrategiaFirma = { id: newId, ...form, usuarioCreacion: 'admin', fechaCreacion: new Date().toISOString().slice(0, 10), activo: 1, firmas: [] }
-      mockEstrategiasFirma.push(nueva)
-      setData(d => [...d, nueva])
+      await estrategiasFirmaApi.crear({ ...form, firmas: [] })
     }
     setModalCrear(false); setEditando(null)
+    cargar()
   }
 
-  const handleEliminar = (id: number) => {
-    const idx = mockEstrategiasFirma.findIndex(x => x.id === id)
-    if (idx >= 0) mockEstrategiasFirma.splice(idx, 1)
-    setData(d => d.filter(x => x.id !== id))
+  const handleEliminar = async (id: number) => {
+    await estrategiasFirmaApi.eliminar(id)
+    cargar()
   }
 
-  const handleSaveFirmas = (items: EstrategiaFirmaItem[]) => {
+  const handleSaveFirmas = async (items: EstrategiaFirmaItem[]) => {
     if (!firmasModal) return
-    const idx = mockEstrategiasFirma.findIndex(x => x.id === firmasModal.id)
-    if (idx >= 0) mockEstrategiasFirma[idx].firmas = items
-    setData(d => d.map(x => x.id === firmasModal.id ? { ...x, firmas: items } : x))
+    await estrategiasFirmaApi.actualizar(firmasModal.id, {
+      firmas: items.map(i => ({ idFirma: i.idFirma, texto: i.texto, orden: i.orden })),
+    })
     setFirmasModal(null)
+    cargar()
   }
 
   const columns: Column<EstrategiaFirma>[] = [
@@ -295,9 +300,9 @@ export function EstrategiaFirmasList() {
       render: r => <span style={{ fontSize: 12, fontWeight: 600, color: r.activo ? 'var(--forest)' : 'var(--ink-4)' }}>
         {r.activo ? 'Sí' : 'No'}
       </span> },
-    {
-      key: '__acc', header: '', width: '9%', align: 'center',
-      render: r => (
+    ...(puedeEditar ? [{
+      key: '__acc', header: '', width: '9%', align: 'center' as const,
+      render: (r: EstrategiaFirma) => (
         <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
           <button title="Modificar" onClick={() => openEditar(r)}
             style={{ width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent',
@@ -316,7 +321,7 @@ export function EstrategiaFirmasList() {
           </button>
         </div>
       ),
-    },
+    }] : []),
   ]
 
   return (
@@ -324,14 +329,16 @@ export function EstrategiaFirmasList() {
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
         <div style={{ flex: 1 }}>
           <Panel title="Lista de estrategias de firma">
-            <DataTable<EstrategiaFirma> columns={columns} data={data} />
+            <DataTable<EstrategiaFirma> columns={columns} data={data} loading={loading} />
           </Panel>
         </div>
-        <div style={{ paddingTop: 4 }}>
-          <button className="btn btn-success" onClick={openCrear}>
-            <i className="fa fa-plus" /> Crear
-          </button>
-        </div>
+        {puedeEditar && (
+          <div style={{ paddingTop: 4 }}>
+            <button className="btn btn-success" onClick={openCrear}>
+              <i className="fa fa-plus" /> Crear
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Modal Crear / Editar */}
@@ -388,6 +395,7 @@ export function EstrategiaFirmasList() {
       {firmasModal && (
         <FirmasModal
           estrategia={firmasModal}
+          firmasCatalogo={firmasCatalogo}
           onClose={() => setFirmasModal(null)}
           onSave={handleSaveFirmas}
         />

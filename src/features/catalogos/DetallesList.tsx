@@ -2,19 +2,35 @@ import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
-import { mockEstrategiasFirma, mockUsuarios } from '@/api/mock'
-import { getDetalles, setDetalles, bumpDetId, resetDetalles } from '@/stores/detallesStore'
+import { SearchableSelect } from '@/components/shared/SearchableSelect'
+import { detallesApi } from '@/api/detalles'
+import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
+import { usuariosApi } from '@/api/usuarios'
+import { authApi } from '@/api/auth'
+import { materialesApi, TIPO_MATERIAL_LABELS, type Material, type TipoMaterial } from '@/api/materiales'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import type { EstrategiaFirma } from '@/types'
+
+// Caché en memoria de las estrategias de firma, poblada al montar DetallesList.
+// Los helpers de serialización del schema (fuera del árbol de React) la leen de forma síncrona.
+let _estrategiasFirmaCache: EstrategiaFirma[] = []
+// Igual que arriba, pero para Materiales — usada solo para que la Vista Previa del editor
+// muestre opciones reales en un selector con origen "Catálogo de Materiales" (la resolución
+// "en vivo" real ocurre al abrir un Batch Record, en EditarBatchRecord.tsx; esto es nada más
+// para que el admin vea cómo se va a ver mientras diseña el formulario).
+let _materialesCache: Material[] = []
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type CompType =
-  | 'textfield' | 'textarea'  | 'number'  | 'currency'
+  | 'textfield' | 'textarea'  | 'number'
   | 'checkbox'  | 'radio'     | 'select'
   | 'datetime'  | 'day'       | 'time'
   | 'survey'    | 'datagrid'  | 'button'
   | 'panel'     | 'columns'   | 'content'
   | 'heading'   | 'image'     | 'divider'
   | 'password'  | 'hidden'
+  | 'pdf'
   | 'firma-seccion'
 
 interface FormComp {
@@ -22,9 +38,25 @@ interface FormComp {
   placeholder?: string; description?: string
   required?: boolean; multiple?: boolean
   values?: { label: string; value: string }[]
+  // select-specific: origen de las opciones — manual (values, arriba) o desde el catálogo de
+  // Materiales en vivo al momento de diligenciar el Batch Record (ver injectMaterialOptions en
+  // EditarBatchRecord.tsx). dataSourceTipo filtra por tipo de material, vacío = todos.
+  dataSource?: 'manual' | 'materiales'
+  dataSourceTipo?: string
   // survey-specific: rows = preguntas, surveyColumns = opciones de respuesta
   surveyRows?: { label: string; value: string }[]
   surveyColumns?: { label: string; value: string }[]
+  surveyQuestionHeader?: string          // título de la primera columna (por defecto "Pregunta")
+  lockOnValue?: string                   // si se selecciona esta opción de respuesta...
+  lockScope?: 'encuesta' | 'linea'       // ...bloquea toda la encuesta o solo esa pregunta
+  // datagrid-specific
+  disableAddRow?: boolean
+  // pdf-specific
+  pdfMode?: 'operario' | 'diseno'  // 'operario': lo sube quien diligencia el BR — 'diseno': fijo, definido por el admin al diseñar el formulario
+  fileMaxSize?: string  // ej. '10MB' — modo 'operario' (compartido entre pdf e imagen)
+  pdfData?: string      // data URI del PDF — solo modo 'diseno'
+  // image-specific
+  imageMode?: 'operario' | 'diseno'  // default 'diseno' (comportamiento histórico: imagen fija)
   // radio layout
   inline?: boolean
   action?: 'submit' | 'reset' | 'custom'
@@ -34,11 +66,16 @@ interface FormComp {
   textAlign?: 'left' | 'center' | 'right'
   imageUrl?: string; imageAlt?: string; imageWidth?: string
   minVal?: number; maxVal?: number
+  minOp?: '>' | '>='; maxOp?: '<' | '<='  // number: comparación estricta vs. inclusiva (default: inclusiva)
+  dateTimeMode?: 'ambos' | 'fecha' | 'hora'  // solo 'datetime': qué partes mostrar
+  dateFormat?: string; timeFormat?: string   // 'datetime' / 'time': formato de despliegue
   custom?: string
   hideLabel?: boolean
+  disabled?: boolean
   calculateValue?: string
   components?: FormComp[]
   columnCount?: number
+  columnWidths?: number[]  // ancho (de 12) de cada columna, mismo orden que las columnas
   _colIdx?: number
   _raw?: Record<string, unknown>
   idEstrategiaFirma?: number
@@ -61,9 +98,27 @@ export const OP_MAPPING_OPTIONS: { value: string; label: string }[] = [
   { value: 'centro',              label: 'Centro de Producción' },
 ]
 
+type EstadoFormulario = 'Activo' | 'En creación' | 'Obsoleto'
+
+// Separador decimal de todos los campos numéricos del formulario — se elige una única vez
+// (form.io deriva el formato de número a nivel de instancia del formulario vía `language`,
+// no por componente, así que esto necesariamente aplica a todos los campos número por igual).
+type NumberFormat = '.' | ','
+
+const DATE_FORMATS: { v: string; label: string }[] = [
+  { v: 'dd/MM/yyyy', label: '31/12/2026' },
+  { v: 'yyyy-MM-dd', label: '2026-12-31' },
+  { v: 'MM/dd/yyyy', label: '12/31/2026' },
+  { v: 'dd-MM-yyyy',  label: '31-12-2026' },
+]
+const TIME_FORMATS: { v: string; label: string }[] = [
+  { v: 'HH:mm', label: '23:59 (24h)' },
+  { v: 'hh:mm a', label: '11:59 PM (12h)' },
+]
+
 interface Detalle {
   id: number; codigo: string; descripcion: string
-  estado: 'Activo' | 'Inactivo'
+  estado: EstadoFormulario
   idEstrategiaFirma?: number
   jsonSchema: string; jsonData: string; jsonOptions: string
 }
@@ -74,7 +129,6 @@ const PAL: { type: CompType; label: string; icon: string; color: string; bg: str
   { type: 'textfield', label: 'Texto',        icon: 'fa-font',          color: '#2563EB', bg: '#EFF6FF', cat: 'Campos' },
   { type: 'textarea',  label: 'Párrafo',      icon: 'fa-align-left',    color: '#0284C7', bg: '#F0F9FF', cat: 'Campos' },
   { type: 'number',    label: 'Número',       icon: 'fa-hashtag',       color: '#7C3AED', bg: '#F5F3FF', cat: 'Campos' },
-  { type: 'currency',  label: 'Moneda',       icon: 'fa-dollar-sign',   color: '#059669', bg: '#ECFDF5', cat: 'Campos' },
   { type: 'checkbox',  label: 'Casilla',      icon: 'fa-check-square',  color: '#16A34A', bg: '#F0FDF4', cat: 'Campos' },
   { type: 'radio',     label: 'Opción única', icon: 'fa-dot-circle',    color: '#D97706', bg: '#FFFBEB', cat: 'Campos' },
   { type: 'select',    label: 'Selector',     icon: 'fa-list-alt',      color: '#DC2626', bg: '#FEF2F2', cat: 'Campos' },
@@ -86,6 +140,7 @@ const PAL: { type: CompType; label: string; icon: string; color: string; bg: str
   { type: 'button',    label: 'Botón',        icon: 'fa-hand-pointer',  color: '#475569', bg: '#F8FAFC', cat: 'Campos' },
   { type: 'password',  label: 'Contraseña',   icon: 'fa-lock',          color: '#9333EA', bg: '#FAF5FF', cat: 'Campos' },
   { type: 'hidden',    label: 'Oculto',       icon: 'fa-eye-slash',     color: '#94A3B8', bg: '#F8FAFC', cat: 'Campos' },
+  { type: 'pdf',       label: 'PDF',          icon: 'fa-file-pdf',      color: '#DC2626', bg: '#FEF2F2', cat: 'Campos' },
   { type: 'panel',     label: 'Panel',        icon: 'fa-square',        color: '#64748B', bg: '#F1F5F9', cat: 'Diseño' },
   { type: 'columns',   label: 'Columnas',     icon: 'fa-columns',       color: '#64748B', bg: '#F1F5F9', cat: 'Diseño' },
   { type: 'heading',   label: 'Encabezado',   icon: 'fa-heading',       color: '#0F172A', bg: '#F1F5F9', cat: 'Diseño' },
@@ -98,6 +153,10 @@ const PAL_MAP = Object.fromEntries(PAL.map(p => [p.type, p]))
 const PAL_KNOWN_TYPES = new Set(PAL.map(p => p.type))
 const LAYOUT_TYPES = ['panel','columns','content','heading','image','divider','hidden','firma-seccion']
 const CONTAINER_TYPES: CompType[] = ['panel','datagrid','columns']
+// Todos los tipos de campo disponibles — usado para los menús "agregar componente" dentro de
+// contenedores (Panel, Columnas), que antes solo ofrecían un subconjunto fijo en vez de la
+// paleta completa.
+const ALL_COMP_TYPES: CompType[] = PAL.map(p => p.type)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -114,7 +173,7 @@ function computeDisabledIds(cs: FormComp[], firmados: Record<string, boolean>): 
   let pending: string[] = []
   for (const c of cs) {
     if (c.type === 'firma-seccion') {
-      const ef = c.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === c.idEstrategiaFirma) : null
+      const ef = c.idEstrategiaFirma ? _estrategiasFirmaCache.find(e => e.id === c.idEstrategiaFirma) : null
       const firmas = ef ? ef.firmas.filter(f => f.activo) : []
       const isSigned = firmas.some(f => firmados[`${c.key}__${f.idFirma}`])
       if (isSigned) pending.forEach(id => disabled.add(id))
@@ -149,7 +208,7 @@ function normalizeType(t: string): CompType {
     phoneNumber: 'textfield',
     email: 'textfield',
     tags: 'textfield',
-    file: 'textfield',
+    file: 'pdf',
   }
   if (aliases[t]) return aliases[t]
   if (PAL_KNOWN_TYPES.has(t as CompType)) return t as CompType
@@ -198,6 +257,16 @@ function removeFromParent(comps: FormComp[], parentId: string, childId: string):
 
 // ─── Serialization ────────────────────────────────────────────────────────────
 
+// Resolves the width (out of 12, Bootstrap-style) of each column of a 'columns' component —
+// the admin's custom columnWidths if it matches the current column count, otherwise an even
+// split. Each value drives a `col-sm-{width}` class form.io emits per column, which our own
+// CSS uses (via flex-grow: {width}) to size columns proportionally.
+function colWidthsFor(c: FormComp, colCount: number): number[] {
+  if (c.columnWidths && c.columnWidths.length === colCount) return c.columnWidths
+  const even = Math.max(1, Math.floor(12 / colCount))
+  return Array.from({ length: colCount }, () => even)
+}
+
 function compToJson(c: FormComp): Record<string, unknown> {
   // Start from _raw to preserve logic, calculateValue, conditions, etc.
   const b: Record<string, unknown> = c._raw ? { ...c._raw } : {}
@@ -210,18 +279,33 @@ function compToJson(c: FormComp): Record<string, unknown> {
     const al  = c.textAlign ? `text-align:${c.textAlign};` : ''
     b.type = 'content'; b.input = false
     b.html = `<${tag} class="bacord-heading" style="${al}margin:0">${c.label || 'Encabezado'}</${tag}>`
-  } else if (c.type === 'image') {
+  } else if (c.type === 'image' && (c.imageMode ?? 'diseno') !== 'operario') {
+    // Imagen fija definida por el admin al diseñar el formulario (comportamiento histórico) —
+    // <img> con data URI o URL externa sí sobrevive el saneo DOMPurify de form.io (a diferencia
+    // de <iframe>, ver el caso de PDF más abajo), así que puede ir directo en el HTML.
     b.type = 'content'; b.input = false
     const marg = c.textAlign === 'center' ? 'margin:0 auto;display:block' : c.textAlign === 'right' ? 'margin-left:auto;display:block' : ''
     b.html = `<img src="${c.imageUrl ?? ''}" alt="${c.imageAlt ?? ''}" style="max-width:${c.imageWidth ?? '100%'};border-radius:6px;${marg}" />`
   } else if (c.type === 'divider') {
     b.type = 'content'; b.input = false
     b.html = '<hr style="border:none;border-top:2px solid rgba(10,21,48,0.12);margin:4px 0" />'
+  } else if (c.type === 'pdf' && c.pdfMode === 'diseno') {
+    // PDF fijo definido por el admin al diseñar el formulario (no lo sube el operario) — se
+    // embebe como parte del schema, igual que la Imagen, y se muestra de solo lectura.
+    // No se puede poner el <iframe> directo en el HTML: form.io sanea el contenido con
+    // DOMPurify, que por defecto elimina las etiquetas <iframe> — el PDF simplemente
+    // desaparecía. En su lugar se deja un slot vacío y el visor lo inyecta por JS después del
+    // render (ver renderDesignPdfs en render.html), leyendo pdfData directo del schema.
+    b.type = 'content'; b.input = false
+    b.pdfData = c.pdfData || ''
+    b.html = c.pdfData
+      ? '<div class="bacord-pdf-design-slot"></div>'
+      : `<div style="padding:16px;text-align:center;color:#94A3B8;border:2px dashed #CBD5E1;border-radius:8px;">Configura el PDF en las propiedades del campo</div>`
   } else if (c.type === 'firma-seccion') {
     // Render as HTML for form.io (custom type unknown to form.io). Buttons post messages to parent.
     b.type = 'content'; b.input = false
     if (c.idEstrategiaFirma !== undefined) b.idEstrategiaFirma = c.idEstrategiaFirma
-    const ef  = c.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === c.idEstrategiaFirma) : null
+    const ef  = c.idEstrategiaFirma ? _estrategiasFirmaCache.find(e => e.id === c.idEstrategiaFirma) : null
     const firmas = ef ? ef.firmas.filter(f => f.activo).sort((a, b) => a.orden - b.orden) : []
     const firmados = _previewFirmados
     const firmasHtml = firmas.map((f, i) => {
@@ -262,6 +346,7 @@ function compToJson(c: FormComp): Record<string, unknown> {
     // Always write booleans — omitting them leaves _raw values intact when user turns them off
     b.hideLabel = !!c.hideLabel
     b.multiple  = !!c.multiple
+    if (c.disabled)        b.disabled      = true
     if (c.calculateValue) b.calculateValue = c.calculateValue
     if (c.custom)         b.custom         = c.custom
     if (c.opMapping)      b.opMapping      = c.opMapping
@@ -273,9 +358,68 @@ function compToJson(c: FormComp): Record<string, unknown> {
       ...(c.maxVal !== undefined ? { max: c.maxVal } : {}),
     }
     if (c.type === 'textarea')  b.rows = c.rows ?? 3
-    if (c.type === 'currency')  { b.currency = 'USD'; b.inputFormat = 'plain' }
+    if (c.type === 'number') {
+      // delimiter habilita el separador de miles; los símbolos reales (punto/coma) los define
+      // el `language` que se pasa a Formio.createForm a nivel de formulario completo — ver
+      // numberFormat en FormularioPanel — por eso la elección aplica a todos los campos numéricos.
+      b.delimiter = true
+      if (c.minVal !== undefined) b.minOp = c.minOp ?? '>='
+      if (c.maxVal !== undefined) b.maxOp = c.maxOp ?? '<='
+    }
+    if (c.type === 'datetime') {
+      const mode = c.dateTimeMode ?? 'ambos'
+      b.enableDate = mode !== 'hora'
+      b.enableTime = mode !== 'fecha'
+      const df = c.dateFormat ?? DATE_FORMATS[0].v
+      const tf = c.timeFormat ?? TIME_FORMATS[0].v
+      b.format = mode === 'fecha' ? df : mode === 'hora' ? tf : `${df} ${tf}`
+      if (mode !== 'fecha') {
+        b.widget = { ...(typeof b.widget === 'object' && b.widget ? b.widget as object : {}), time_24hr: tf === 'HH:mm' }
+      }
+    }
+    if (c.type === 'time') {
+      const tf = c.timeFormat ?? TIME_FORMATS[0].v
+      b.format = tf
+      b.widget = { ...(typeof b.widget === 'object' && b.widget ? b.widget as object : {}), time_24hr: tf === 'HH:mm' }
+    }
+    if (c.type === 'pdf') {
+      // Modo 'operario' (default): lo sube quien diligencia el Batch Record. El modo 'diseno'
+      // (PDF fijo definido por el admin) se resuelve arriba, antes de llegar a esta rama, como
+      // un campo de solo lectura — nunca llega aquí.
+      // Sin backend de almacenamiento de archivos aparte, se guarda como base64 embebido
+      // directamente en la data del batch record — igual que el resto de los datos del
+      // formulario. El visor lo renderiza inline (ver renderPdfPreviews en render.html).
+      b.type = 'file'
+      b.storage = 'base64'
+      b.filePattern = '.pdf,application/pdf'
+      b.fileMaxSize = c.fileMaxSize || '10MB'
+      b.webcam = false
+      b.image = false
+    }
+    if (c.type === 'image' && c.imageMode === 'operario') {
+      // Imagen que sube quien diligencia el Batch Record (ej: foto de evidencia) — a
+      // diferencia del modo 'diseno' (arriba, resuelto antes de llegar aquí), este SÍ es un
+      // campo de entrada real. 'image' está en LAYOUT_TYPES (para el caso 'diseno', que es
+      // contenido estático), así que hay que forzar input:true aquí explícitamente.
+      b.input = true
+      b.type = 'file'
+      b.storage = 'base64'
+      b.filePattern = '.jpg,.jpeg,.png,.webp,.gif,image/*'
+      b.fileMaxSize = c.fileMaxSize || '5MB'
+      b.image = true
+      b.webcam = false
+    }
     if (c.type === 'select') {
-      b.data = { values: (c.values ?? []).length ? c.values : [{ label: 'Opción 1', value: 'opcion1' }] }
+      if (c.dataSource === 'materiales') {
+        // Las opciones reales se resuelven en vivo contra el catálogo de Materiales al abrir
+        // el Batch Record (ver injectMaterialOptions en EditarBatchRecord.tsx) — aquí solo se
+        // deja el marcador con el filtro de tipo; b.data.values queda vacío a propósito.
+        b.materialSource = c.dataSourceTipo || 'ALL'
+        b.data = { values: [] }
+      } else {
+        delete (b as Record<string, unknown>).materialSource
+        b.data = { values: (c.values ?? []).length ? c.values : [{ label: 'Opción 1', value: 'opcion1' }] }
+      }
       b.widget = 'choicesjs'
     }
     if (c.type === 'radio') {
@@ -285,6 +429,14 @@ function compToJson(c: FormComp): Record<string, unknown> {
     if (c.type === 'survey') {
       b.questions = (c.surveyRows    ?? []).length ? c.surveyRows    : [{ label: 'Pregunta 1', value: 'pregunta1' }]
       b.values    = (c.surveyColumns ?? []).length ? c.surveyColumns : [{ label: 'Opción A', value: 'opcion_a' }, { label: 'Opción B', value: 'opcion_b' }]
+      // Propiedades propias (no nativas de form.io) que lee el JS del visor para: (1) rotular
+      // la columna de preguntas, y (2) bloquear el formulario/la fila cuando se elige cierta
+      // respuesta — ver applySurveyQuestionHeader / setupSurveyLocks en render.html.
+      b.questionHeader = c.surveyQuestionHeader || 'Pregunta'
+      if (c.lockOnValue) { b.lockOnValue = c.lockOnValue; b.lockScope = c.lockScope ?? 'linea' }
+    }
+    if (c.type === 'datagrid') {
+      b.disableAddingRemovingRows = !!c.disableAddRow
     }
     if (c.type === 'button')  { b.action = c.action ?? 'submit'; b.theme = c.theme ?? 'primary' }
     if (c.type === 'panel')   { b.input = false; b.title = c.title ?? c.label; b.collapsible = c.collapsible ?? false }
@@ -296,7 +448,7 @@ function compToJson(c: FormComp): Record<string, unknown> {
   if (c.components && c.components.length > 0) {
     if (c.type === 'columns') {
       const colCount = c.columnCount ?? 2
-      const colWidth = Math.floor(12 / colCount)
+      const widths = colWidthsFor(c, colCount)
       // Group children by their assigned column index
       const grouped: FormComp[][] = Array.from({ length: colCount }, () => [])
       c.components!.forEach(ch => {
@@ -305,11 +457,11 @@ function compToJson(c: FormComp): Record<string, unknown> {
       })
       const rawCols = b.columns as Record<string, unknown>[] | undefined
       if (rawCols && rawCols.length === colCount) {
-        b.columns = rawCols.map((col, i) => ({ ...col, components: applyLinealLocking(grouped[i]) }))
+        b.columns = rawCols.map((col, i) => ({ ...col, width: widths[i], currentWidth: widths[i], components: applyLinealLocking(grouped[i]) }))
       } else {
-        b.columns = grouped.map(group => ({
-          width: colWidth, offset: 0, push: 0, pull: 0, size: 'sm',
-          currentWidth: colWidth, components: applyLinealLocking(group),
+        b.columns = grouped.map((group, i) => ({
+          width: widths[i], offset: 0, push: 0, pull: 0, size: 'sm',
+          currentWidth: widths[i], components: applyLinealLocking(group),
         }))
       }
       // columns must never have a top-level components[] — form.io uses columns[].components
@@ -320,12 +472,14 @@ function compToJson(c: FormComp): Record<string, unknown> {
   } else if (CONTAINER_TYPES.includes(c.type)) {
     if (c.type === 'columns') {
       const colCount = c.columnCount ?? 2
-      const colWidth = Math.floor(12 / colCount)
+      const widths = colWidthsFor(c, colCount)
       const rawCols = b.columns as Record<string, unknown>[] | undefined
       if (!rawCols || rawCols.length !== colCount) {
-        b.columns = Array.from({ length: colCount }, () => ({
-          width: colWidth, offset: 0, push: 0, pull: 0, size: 'sm', currentWidth: colWidth, components: [],
+        b.columns = Array.from({ length: colCount }, (_, i) => ({
+          width: widths[i], offset: 0, push: 0, pull: 0, size: 'sm', currentWidth: widths[i], components: [],
         }))
+      } else {
+        b.columns = rawCols.map((col, i) => ({ ...col, width: widths[i], currentWidth: widths[i] }))
       }
       delete (b as Record<string, unknown>).components
     } else if (!b.components) {
@@ -341,6 +495,38 @@ function toFormio(cs: FormComp[], firmados?: Record<string, boolean>): string {
   const result = JSON.stringify({ components: applyLinealLocking(cs) }, null, 2)
   _previewFirmados = {}
   return result
+}
+
+// Rellena, solo para la Vista Previa del editor (nunca se guarda así), las opciones de los
+// selectores con origen "Catálogo de Materiales" — en compToJson quedan con `values: []` a
+// propósito, porque la resolución real ocurre en vivo al abrir un Batch Record
+// (injectMaterialOptions en EditarBatchRecord.tsx). Sin este paso, la Vista Previa mostraría
+// el selector vacío y parecería que la función no funciona.
+function injectMaterialesEnPreview(json: string): string {
+  try {
+    const schema = JSON.parse(json) as Record<string, unknown>
+    const walk = (comps: unknown[]): void => {
+      for (const raw of comps) {
+        const c = raw as Record<string, unknown>
+        if (c.type === 'select' && typeof c.materialSource === 'string') {
+          const filtro = c.materialSource
+          c.data = {
+            values: _materialesCache
+              .filter(m => m.activo && (filtro === 'ALL' || m.tipo === filtro))
+              .map(m => ({ label: `${m.descripcion} (${m.codigo})`, value: m.codigo })),
+          }
+        }
+        if (Array.isArray(c.components)) walk(c.components)
+        if (Array.isArray(c.columns)) {
+          for (const col of c.columns as Record<string, unknown>[]) {
+            if (Array.isArray(col.components)) walk(col.components)
+          }
+        }
+      }
+    }
+    if (Array.isArray(schema.components)) walk(schema.components)
+    return JSON.stringify(schema)
+  } catch { return json }
 }
 
 function parseComp(c: Record<string, unknown>): FormComp {
@@ -361,8 +547,15 @@ function parseComp(c: Record<string, unknown>): FormComp {
     values: rawType === 'radio'
       ? (c.values as { label: string; value: string }[] | undefined)
       : ((c.data as Record<string, unknown>)?.values as { label: string; value: string }[] | undefined),
+    dataSource: rawType === 'select' && typeof c.materialSource === 'string' ? 'materiales' : undefined,
+    dataSourceTipo: rawType === 'select' && typeof c.materialSource === 'string' && c.materialSource !== 'ALL' ? c.materialSource : undefined,
     surveyRows:    rawType === 'survey' ? (c.questions as { label: string; value: string }[] | undefined) : undefined,
     surveyColumns: rawType === 'survey' ? (c.values as { label: string; value: string }[] | undefined) : undefined,
+    surveyQuestionHeader: rawType === 'survey' ? (c.questionHeader as string | undefined) : undefined,
+    lockOnValue: rawType === 'survey' ? (c.lockOnValue as string | undefined) : undefined,
+    lockScope: rawType === 'survey' ? (c.lockScope as 'encuesta' | 'linea' | undefined) : undefined,
+    disableAddRow: rawType === 'datagrid' ? !!(c.disableAddingRemovingRows) : undefined,
+    fileMaxSize: type === 'pdf' ? (c.fileMaxSize as string | undefined) : undefined,
     action: c.action as 'submit' | 'reset' | 'custom' | undefined,
     theme: c.theme as string | undefined,
     title: (c.title as string) ?? undefined,
@@ -370,8 +563,16 @@ function parseComp(c: Record<string, unknown>): FormComp {
     html: (c.html as string | undefined) ?? (c.content as string | undefined),
     rows: c.rows as number | undefined,
     hideLabel: !!(c.hideLabel),
+    disabled: !!(c.disabled),
     minVal: validate.min as number | undefined,
     maxVal: validate.max as number | undefined,
+    minOp: c.minOp as '>' | '>=' | undefined,
+    maxOp: c.maxOp as '<' | '<=' | undefined,
+    dateTimeMode: c.enableDate === false ? 'hora' : c.enableTime === false ? 'fecha' : undefined,
+    dateFormat: rawType === 'datetime' ? (typeof c.format === 'string' ? c.format.split(' ')[0] : undefined) : undefined,
+    timeFormat: (rawType === 'datetime' || rawType === 'time')
+      ? (typeof c.format === 'string' ? c.format.split(' ').slice(1).join(' ') || (rawType === 'time' ? c.format as string : undefined) : undefined)
+      : undefined,
     custom: c.custom as string | undefined,
     calculateValue: c.calculateValue as string | undefined,
     idEstrategiaFirma: c.idEstrategiaFirma as number | undefined,
@@ -385,6 +586,7 @@ function parseComp(c: Record<string, unknown>): FormComp {
   } else if (Array.isArray(c.columns)) {
     const cols = c.columns as Record<string, unknown>[]
     comp.columnCount = cols.length || 2
+    comp.columnWidths = cols.map(col => Number(col.width) || Math.floor(12 / cols.length))
     comp.components = cols.flatMap((col, idx) =>
       Array.isArray(col.components)
         ? (col.components as Record<string, unknown>[]).map(ch => {
@@ -416,10 +618,6 @@ function loadComps(detalle: Detalle): FormComp[] {
   }
   return fromFormio(detalle.jsonSchema)
 }
-
-// ─── Initial data ─────────────────────────────────────────────────────────────
-
-// Detalle data now lives in @/stores/detallesStore — shared with EditarBatchRecord
 
 function countComps(json: string) {
   try {
@@ -481,7 +679,6 @@ function FieldPreview({ c }: { c: FormComp }) {
     case 'textfield': return <div>{lbl}<input style={base} placeholder={c.placeholder || 'Ingrese texto...'} readOnly /></div>
     case 'password':  return <div>{lbl}<input style={base} type="password" placeholder="••••••••" readOnly /></div>
     case 'number':    return <div>{lbl}<input style={base} placeholder={`${c.minVal ?? 0}${c.maxVal !== undefined ? ` – ${c.maxVal}` : ''}`} readOnly /></div>
-    case 'currency':  return <div>{lbl}<div style={{ position:'relative' }}><span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:'#94A3B8', fontSize:13 }}>$</span><input style={{ ...base, paddingLeft:22 }} placeholder="0.00" readOnly /></div></div>
     case 'textarea':  return <div>{lbl}<textarea style={{ ...base, height:60, resize:'none', display:'block' }} placeholder={c.placeholder || 'Ingrese texto...'} readOnly /></div>
     case 'checkbox':  return <div style={{ display:'flex', alignItems:'center', gap:8 }}><div style={{ width:16, height:16, borderRadius:4, border:'2px solid #D1D5DB', background:'#F9FAFB', flexShrink:0 }} /><span style={{ fontSize:13, color:'#374151' }}>{c.label}</span></div>
     case 'radio':     return <div>{lbl}{(c.values ?? [{ label:'Opción 1', value:'o1' },{ label:'Opción 2', value:'o2' }]).slice(0,3).map(v=><div key={v.value} style={{ display:'flex', alignItems:'center', gap:7, marginBottom:3 }}><div style={{ width:14, height:14, borderRadius:'50%', border:'2px solid #D1D5DB', background:'#F9FAFB', flexShrink:0 }} /><span style={{ fontSize:12.5, color:'#6B7280' }}>{v.label}</span></div>)}</div>
@@ -490,6 +687,12 @@ function FieldPreview({ c }: { c: FormComp }) {
     case 'day':       return <div>{lbl}<div style={{ display:'flex', border:'1.5px solid #E2E8F0', borderRadius:6, overflow:'hidden' }}><input style={{ ...base, border:'none', borderRadius:0, flex:1, minWidth:0, width:'auto' }} placeholder="dd / mm / aaaa" readOnly /><div style={{ display:'grid', placeItems:'center', width:34, flexShrink:0, background:'#F1F5F9', borderLeft:'1px solid #E2E8F0' }}><i className="fa fa-calendar" style={{ color:'#6B7280', fontSize:12 }} /></div></div></div>
     case 'time':      return <div>{lbl}<input style={{ ...base, maxWidth:120 }} placeholder="hh:mm" readOnly /></div>
     case 'hidden':    return <div style={{ display:'flex', alignItems:'center', gap:7, padding:'4px 8px', background:'#F8FAFC', border:'1.5px dashed #CBD5E1', borderRadius:6 }}><i className="fa fa-eye-slash" style={{ color:'#94A3B8', fontSize:11 }} /><span style={{ fontSize:11.5, color:'#94A3B8', fontFamily:'var(--f-mono)' }}>{c.key} <span style={{ opacity:.6 }}>(oculto)</span></span></div>
+    case 'pdf':
+      return c.pdfMode === 'diseno'
+        ? (c.pdfData
+            ? <div style={{ border:'1.5px solid #E2E8F0', borderRadius:6, overflow:'hidden', background:'#F1F5F9', height:90, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:4 }}><i className="fa fa-file-pdf" style={{ color:'#DC2626', fontSize:20 }} /><span style={{ fontSize:10.5, color:'#64748B' }}>PDF fijo del formulario</span></div>
+            : <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', border:'2px dashed #CBD5E1', borderRadius:6, background:'#F8FAFC' }}><i className="fa fa-file-pdf" style={{ color:'#94A3B8', fontSize:16 }} /><span style={{ fontSize:11.5, color:'#94A3B8' }}>Configura el PDF en propiedades</span></div>)
+        : <div>{lbl}<div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', border:'1.5px dashed #FCA5A5', borderRadius:6, background:'#FEF2F2' }}><i className="fa fa-file-pdf" style={{ color:'#DC2626', fontSize:16 }} /><span style={{ fontSize:11.5, color:'#DC2626' }}>Subir PDF (lo hace el operario)</span></div></div>
     case 'button': {
       const col = BTN_COLORS[c.theme ?? 'primary'] ?? '#2563EB'
       return <button style={{ padding:'8px 20px', background:col, color:'#fff', border:'none', borderRadius:7, fontSize:13, fontWeight:600, cursor:'default', opacity:0.9 }}>{c.label}</button>
@@ -534,6 +737,9 @@ function FieldPreview({ c }: { c: FormComp }) {
       )
     }
     case 'image':
+      if (c.imageMode === 'operario') {
+        return <div>{lbl}<div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', border:'1.5px dashed #C4B5FD', borderRadius:6, background:'#F5F3FF' }}><i className="fa fa-camera" style={{ color:'#8B5CF6', fontSize:16 }} /><span style={{ fontSize:11.5, color:'#8B5CF6' }}>Subir imagen (lo hace el operario)</span></div></div>
+      }
       return c.imageUrl
         ? <div style={{ textAlign:c.textAlign ?? 'left' }}><img src={c.imageUrl} alt={c.imageAlt ?? ''} style={{ maxWidth:c.imageWidth ?? '100%', borderRadius:6, display:'inline-block', maxHeight:120, objectFit:'cover' }} /></div>
         : <div style={{ background:'#F1F5F9', border:'2px dashed #CBD5E1', borderRadius:8, padding:'18px 16px', textAlign:'center', color:'#94A3B8' }}><i className="fa fa-image" style={{ fontSize:22, display:'block', marginBottom:6 }} /><span style={{ fontSize:11.5 }}>Configura la URL en propiedades</span></div>
@@ -547,7 +753,7 @@ function FieldPreview({ c }: { c: FormComp }) {
           <div style={{ border:'1px solid #E2E8F0', borderRadius:6, overflow:'hidden', fontSize:11 }}>
             {/* Header row */}
             <div style={{ display:'grid', gridTemplateColumns:gridCols, background:'#F8FAFC', borderBottom:'1px solid #E2E8F0' }}>
-              <div style={{ padding:'4px 8px', fontWeight:700, color:'#64748B', borderRight:'1px solid #E2E8F0' }}>Pregunta</div>
+              <div style={{ padding:'4px 8px', fontWeight:700, color:'#64748B', borderRight:'1px solid #E2E8F0' }}>{c.surveyQuestionHeader || 'Pregunta'}</div>
               {sCols.map(col => (
                 <div key={col.value} style={{ padding:'4px 8px', fontWeight:700, color:'#64748B', borderRight:'1px solid #E2E8F0', textAlign:'center' }}>{col.label}</div>
               ))}
@@ -592,7 +798,7 @@ function FieldPreview({ c }: { c: FormComp }) {
       </div>
     )
     case 'firma-seccion': {
-      const ef = c.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === c.idEstrategiaFirma) : null
+      const ef = c.idEstrategiaFirma ? _estrategiasFirmaCache.find(e => e.id === c.idEstrategiaFirma) : null
       const firmas = ef ? ef.firmas.filter(f => f.activo).sort((a, b) => a.orden - b.orden) : []
       return (
         <div>
@@ -643,7 +849,7 @@ function NestedCompList({ comps, selectedId, onSelect, parentId, onRemove, onAdd
   const [adding, setAdding] = useState(false)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const dragSrcId = useRef<string | null>(null)
-  const quickTypes: CompType[] = ['textfield','number','textarea','checkbox','radio','select','datetime','button','panel','columns','firma-seccion']
+  const quickTypes: CompType[] = ALL_COMP_TYPES
 
   const handleDragStart = (id: string) => { dragSrcId.current = id }
   const handleDrop = (targetId: string) => {
@@ -782,8 +988,9 @@ function ColumnsPreview({ comp, selectedId, onSelect }: {
   const childrenByCol = Array.from({ length: colCount }, (_, i) =>
     (comp.components ?? []).filter(ch => Math.min(ch._colIdx ?? 0, colCount - 1) === i)
   )
+  const gridTemplateColumns = colWidthsFor(comp, colCount).map(w => `${w}fr`).join(' ')
   return (
-    <div style={{ display:'grid', gridTemplateColumns:`repeat(${colCount}, 1fr)`, gap:6 }}>
+    <div style={{ display:'grid', gridTemplateColumns, gap:6 }}>
       {childrenByCol.map((children, colIdx) => (
         <div key={colIdx}
           style={{ border:'1.5px solid #E2E8F0', borderRadius:7, padding:'6px 8px', background:'#F8FAFC', minHeight:40 }}>
@@ -825,13 +1032,14 @@ function ColumnsEditor({ comp, selectedId, onSelect, onRemove, onAdd, onMoveToCo
   onReorder: (parentId: string, childId: string, dir: 'up' | 'down', colIdx: number) => void
 }) {
   const colCount = comp.columnCount ?? 2
-  const quickTypes: CompType[] = ['textfield','number','textarea','checkbox','radio','select','datetime','button','panel','firma-seccion']
+  const quickTypes: CompType[] = ALL_COMP_TYPES
   const [addingIn, setAddingIn] = useState<number | null>(null)
   const [hovCh, setHovCh] = useState<string | null>(null)
 
   const childrenByCol = Array.from({ length: colCount }, (_, i) =>
     (comp.components ?? []).filter(ch => Math.min(ch._colIdx ?? 0, colCount - 1) === i)
   )
+  const gridTemplateColumns = colWidthsFor(comp, colCount).map(w => `${w}fr`).join(' ')
 
   const colBtnSt: React.CSSProperties = {
     width:20, height:20, border:'none', background:'transparent',
@@ -840,7 +1048,7 @@ function ColumnsEditor({ comp, selectedId, onSelect, onRemove, onAdd, onMoveToCo
   }
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:`repeat(${colCount}, 1fr)`, gap:10, marginTop:8 }}>
+    <div style={{ display:'grid', gridTemplateColumns, gap:10, marginTop:8 }}>
       {Array.from({ length: colCount }).map((_, colIdx) => (
         <div key={colIdx} style={{
           border:'1.5px solid #E2E8F0', borderRadius:10, overflow:'hidden',
@@ -982,6 +1190,21 @@ function RichTextEditor({ value, onChange }: { value: string; onChange: (html: s
     document.execCommand(cmd, false, val ?? undefined)
     flush()
   }
+  // execCommand('fontSize') only supports the legacy 1-7 HTML sizes, so it's used purely as a
+  // wrapping mechanism (produces <font size="7">) and then swapped for a real px-based <span>.
+  const applyFontSize = (px: number) => {
+    editorRef.current?.focus()
+    document.execCommand('fontSize', false, '7')
+    if (editorRef.current) {
+      editorRef.current.querySelectorAll('font[size="7"]').forEach(el => {
+        const span = document.createElement('span')
+        span.style.fontSize = px + 'px'
+        span.innerHTML = el.innerHTML
+        el.replaceWith(span)
+      })
+    }
+    flush()
+  }
   const flush = () => {
     if (!editorRef.current) return
     const h = editorRef.current.innerHTML
@@ -1015,6 +1238,17 @@ function RichTextEditor({ value, onChange }: { value: string; onChange: (html: s
           <option value="p">Párrafo</option>
           <option value="h1">H1</option><option value="h2">H2</option>
           <option value="h3">H3</option><option value="h4">H4</option>
+        </select>
+        {/* Font size */}
+        <select value="" onChange={e => { const px = Number(e.target.value); if (px) applyFontSize(px) }}
+          title="Tamaño de letra"
+          style={{ height:26, padding:'0 5px', border:'1.5px solid #E2E8F0', borderRadius:5, fontSize:11.5, background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>
+          <option value="">Tamaño</option>
+          <option value="11">Pequeño (11px)</option>
+          <option value="14">Normal (14px)</option>
+          <option value="17">Mediano (17px)</option>
+          <option value="22">Grande (22px)</option>
+          <option value="28">Muy grande (28px)</option>
         </select>
         {div}
         {/* Bold / Italic / Underline / Strike */}
@@ -1079,15 +1313,18 @@ function RichTextEditor({ value, onChange }: { value: string; onChange: (html: s
 
 // ─── PropertiesPanel ──────────────────────────────────────────────────────────
 
-function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
+function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange, numFormat, onNumFormatChange }: {
   comp: FormComp
   onChange: (p: Partial<FormComp>) => void
   onDelete: () => void
   onColumnCountChange?: (n: number) => void
+  numFormat?: NumberFormat
+  onNumFormatChange?: (f: NumberFormat) => void
 }) {
   const [valTxt, setValTxt] = useState(() => (comp.values ?? []).map(v=>v.label).join('\n'))
   const [surveyRowsTxt, setSurveyRowsTxt] = useState(() => (comp.surveyRows ?? []).map(v=>v.label).join('\n'))
   const [surveyColsTxt, setSurveyColsTxt] = useState(() => (comp.surveyColumns ?? []).map(v=>v.label).join('\n'))
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const prevIdRef = useRef(comp.id)
   useEffect(() => {
     if (comp.id !== prevIdRef.current) {
@@ -1101,6 +1338,20 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
     setValTxt(txt)
     onChange({ values: txt.split('\n').filter(Boolean).map(l=>({ label:l.trim(), value:toKey(l.trim())||l.trim() })) })
   }
+  // Convierte un archivo subido desde el sistema a data URI (base64) para poder guardarlo
+  // directamente en el schema del formulario — no hay un servicio de almacenamiento de
+  // archivos aparte, así que esto se embebe igual que ya se hace con el resto de la data.
+  const uploadAsDataUri = (file: File, maxMb: number, onDone: (dataUri: string) => void) => {
+    setUploadError(null)
+    if (file.size > maxMb * 1024 * 1024) {
+      setUploadError(`El archivo pesa demasiado (máx. ${maxMb}MB).`)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => onDone(reader.result as string)
+    reader.onerror = () => setUploadError('No se pudo leer el archivo.')
+    reader.readAsDataURL(file)
+  }
   const pi = (label: string, value: string, onChg: (v:string)=>void, placeholder?: string, type='text') => (
     <div style={{ marginBottom:12 }}>
       <label style={PROP_LABEL}>{label}</label>
@@ -1111,6 +1362,11 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
   const p = PAL_MAP[comp.type] ?? { icon:'fa-cube', color:'#94A3B8', bg:'#F8FAFC', label: comp.type }
   const noBasic = LAYOUT_TYPES.includes(comp.type)
   const hasVals = ['select','radio'].includes(comp.type)
+  const colCount = comp.columnCount ?? 2
+  const colWidths = comp.columnWidths && comp.columnWidths.length === colCount
+    ? comp.columnWidths
+    : Array.from({ length: colCount }, () => Math.floor(12 / colCount))
+  const colWidthsTotal = colWidths.reduce((a, b) => a + b, 0)
 
   const alignBtn = (v: 'left'|'center'|'right', icon: string) => (
     <button key={v} onClick={()=>onChange({textAlign:v})}
@@ -1155,13 +1411,55 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
       {comp.type === 'image' && (
         <>
           <div style={{ fontSize:10, fontWeight:700, color:'#CBD5E1', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:10 }}>Imagen</div>
-          {pi('URL', comp.imageUrl??'', v=>onChange({imageUrl:v}), 'https://...')}
-          {pi('Texto alternativo', comp.imageAlt??'', v=>onChange({imageAlt:v}), 'Descripción...')}
-          {pi('Ancho', comp.imageWidth??'100%', v=>onChange({imageWidth:v}), '100%, 50%, 300px...')}
-          <div style={{ marginBottom:12 }}>
-            <label style={PROP_LABEL}>Alineación</label>
-            <div style={{ display:'flex', gap:4 }}>{alignBtn('left','fa-align-left')}{alignBtn('center','fa-align-center')}{alignBtn('right','fa-align-right')}</div>
+          <label style={PROP_LABEL}>¿Quién la sube?</label>
+          <div style={{ display:'flex', gap:6, marginBottom:12 }}>
+            {([{ v:'diseno' as const, label:'Es parte del diseño' }, { v:'operario' as const, label:'El operario (en producción)' }]).map(opt => (
+              <button key={opt.v} onClick={()=>onChange({imageMode:opt.v})}
+                style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`1.5px solid ${(comp.imageMode??'diseno')===opt.v?'#8B5CF6':'#E2E8F0'}`, background:(comp.imageMode??'diseno')===opt.v?'#F5F3FF':'#fff', color:(comp.imageMode??'diseno')===opt.v?'#8B5CF6':'#374151', fontSize:11, fontWeight:(comp.imageMode??'diseno')===opt.v?700:400, cursor:'pointer' }}>
+                {opt.label}
+              </button>
+            ))}
           </div>
+
+          {(comp.imageMode ?? 'diseno') === 'diseno' ? (
+            <>
+              {pi('URL', comp.imageUrl??'', v=>onChange({imageUrl:v}), 'https://...')}
+              <div style={{ marginBottom:12 }}>
+                <label style={PROP_LABEL}>O subir desde el sistema</label>
+                <input type="file" accept="image/*" style={{ width:'100%', fontSize:12, color:'#374151' }}
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    uploadAsDataUri(file, 3, dataUri => onChange({ imageUrl: dataUri }))
+                    e.target.value = ''
+                  }} />
+                {uploadError && <div style={{ fontSize:11, color:'#dc2626', marginTop:5 }}>{uploadError}</div>}
+              </div>
+              {comp.imageUrl && (
+                <div style={{ marginBottom:12 }}>
+                  <img src={comp.imageUrl} alt="" style={{ maxWidth:'100%', maxHeight:110, borderRadius:6, border:'1.5px solid #E2E8F0', display:'block' }} />
+                </div>
+              )}
+              {pi('Texto alternativo', comp.imageAlt??'', v=>onChange({imageAlt:v}), 'Descripción...')}
+              {pi('Ancho', comp.imageWidth??'100%', v=>onChange({imageWidth:v}), '100%, 50%, 300px...')}
+              <div style={{ marginBottom:12 }}>
+                <label style={PROP_LABEL}>Alineación</label>
+                <div style={{ display:'flex', gap:4 }}>{alignBtn('left','fa-align-left')}{alignBtn('center','fa-align-center')}{alignBtn('right','fa-align-right')}</div>
+              </div>
+              <div style={{ fontSize:10.5, color:'#94A3B8', lineHeight:1.4 }}>
+                Esta imagen queda fija en el formulario (ej: un logo o diagrama) — el operario solo la visualiza.
+              </div>
+            </>
+          ) : (
+            <>
+              {pi('Etiqueta', comp.label, v=>onChange({label:v,key:toKey(v)}), 'Ej: Foto de la muestra')}
+              {pi('Texto alternativo', comp.imageAlt??'', v=>onChange({imageAlt:v}), 'Descripción...')}
+              {pi('Tamaño máximo del archivo', comp.fileMaxSize ?? '5MB', v=>onChange({fileMaxSize:v}), '5MB')}
+              <div style={{ fontSize:10.5, color:'#94A3B8', lineHeight:1.4 }}>
+                Quien diligencie el Batch Record sube la imagen (ej: foto de evidencia).
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -1189,16 +1487,13 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
           {pi('Etiqueta', comp.label, v => onChange({ label: v, key: toKey(v) }), 'Ej: Revisión de condiciones...')}
           <div style={{ marginBottom:12 }}>
             <label style={PROP_LABEL}>Estrategia de firma</label>
-            <select style={{ ...PROP_INP, borderColor: comp.idEstrategiaFirma ? '#7C3AED' : '#E2E8F0' }}
-              value={comp.idEstrategiaFirma ?? ''}
-              onChange={e => onChange({ idEstrategiaFirma: e.target.value ? Number(e.target.value) : undefined })}
-              onFocus={e => e.target.style.borderColor = '#7C3AED'}
-              onBlur={e => e.target.style.borderColor = comp.idEstrategiaFirma ? '#7C3AED' : '#E2E8F0'}>
-              <option value="">— Sin estrategia —</option>
-              {mockEstrategiasFirma.filter(e => e.activo).map(ef => (
-                <option key={ef.id} value={ef.id}>{ef.codigo} — {ef.descripcion}</option>
-              ))}
-            </select>
+            <SearchableSelect
+              options={_estrategiasFirmaCache.filter(e => e.activo).map(ef => ({ value: ef.id, label: ef.codigo, sublabel: ef.descripcion }))}
+              value={comp.idEstrategiaFirma ?? null}
+              onChange={v => onChange({ idEstrategiaFirma: v ? Number(v) : undefined })}
+              placeholder="Buscar estrategia de firma…"
+              emptyOptionLabel="Sin estrategia"
+            />
           </div>
         </>
       )}
@@ -1211,32 +1506,161 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
         </>
       )}
 
+      {/* PDF */}
+      {comp.type === 'pdf' && (
+        <div style={{ marginBottom:12 }}>
+          <div style={SEC_TITLE}>PDF</div>
+          <label style={PROP_LABEL}>¿Quién lo sube?</label>
+          <div style={{ display:'flex', gap:6, marginBottom:10 }}>
+            {([{ v:'operario' as const, label:'El operario (en producción)' }, { v:'diseno' as const, label:'Es parte del diseño' }]).map(opt => (
+              <button key={opt.v} onClick={()=>onChange({pdfMode:opt.v})}
+                style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`1.5px solid ${(comp.pdfMode??'operario')===opt.v?'#DC2626':'#E2E8F0'}`, background:(comp.pdfMode??'operario')===opt.v?'#FEF2F2':'#fff', color:(comp.pdfMode??'operario')===opt.v?'#DC2626':'#374151', fontSize:11, fontWeight:(comp.pdfMode??'operario')===opt.v?700:400, cursor:'pointer' }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {(comp.pdfMode ?? 'operario') === 'operario' ? (
+            <>
+              {pi('Tamaño máximo del archivo', comp.fileMaxSize ?? '10MB', v=>onChange({fileMaxSize:v}), '10MB')}
+              <div style={{ fontSize:10.5, color:'#94A3B8', lineHeight:1.4 }}>
+                Quien diligencie el Batch Record sube el PDF (ej: un certificado, una foto escaneada). Se ve directamente dentro del formulario, sin necesidad de descargarlo.
+              </div>
+            </>
+          ) : (
+            <>
+              <label style={PROP_LABEL}>Archivo PDF</label>
+              <input type="file" accept="application/pdf,.pdf" style={{ width:'100%', fontSize:12, color:'#374151' }}
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  uploadAsDataUri(file, 10, dataUri => onChange({ pdfData: dataUri }))
+                  e.target.value = ''
+                }} />
+              {uploadError && <div style={{ fontSize:11, color:'#dc2626', marginTop:5 }}>{uploadError}</div>}
+              {comp.pdfData && (
+                <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'#F0FDF4', border:'1.5px solid #BBF7D0', borderRadius:6 }}>
+                  <i className="fa fa-check-circle" style={{ color:'#16A34A' }} />
+                  <span style={{ fontSize:11.5, color:'#166534' }}>PDF cargado</span>
+                </div>
+              )}
+              <div style={{ fontSize:10.5, color:'#94A3B8', marginTop:8, lineHeight:1.4 }}>
+                Este PDF queda fijo en el formulario (ej: un instructivo o SOP) — el operario solo lo visualiza, no lo puede cambiar.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Standard fields */}
       {!noBasic && !['hidden','button','divider'].includes(comp.type) && comp.type !== 'panel' && (
         <>
           <div style={{ fontSize:10, fontWeight:700, color:'#CBD5E1', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:10 }}>General</div>
           {pi('Etiqueta', comp.label, v=>onChange({label:v,key:toKey(v)}))}
           {pi('Propiedad (key)', comp.key, v=>onChange({key:v}), 'auto_generado')}
-          {!['checkbox','radio','survey','image','datetime','day','time'].includes(comp.type) && pi('Marcador', comp.placeholder??'', v=>onChange({placeholder:v}), 'Texto de ayuda...')}
+          {!['checkbox','radio','survey','image','datetime','day','time','pdf'].includes(comp.type) && pi('Marcador', comp.placeholder??'', v=>onChange({placeholder:v}), 'Texto de ayuda...')}
           {pi('Descripción', comp.description??'', v=>onChange({description:v}), 'Descripción opcional...')}
           {comp.type === 'textarea' && pi('Filas', String(comp.rows??3), v=>onChange({rows:parseInt(v)||3}), '3', 'number')}
           {comp.type === 'number' && (
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-              <div style={{ marginBottom:12 }}>
-                <label style={PROP_LABEL}>Mínimo</label>
-                <input type="number" style={PROP_INP} value={comp.minVal??''} onChange={e=>onChange({minVal:e.target.value===''?undefined:Number(e.target.value)})}
-                  onFocus={e=>e.target.style.borderColor='#2563EB'} onBlur={e=>e.target.style.borderColor='#E2E8F0'} />
+            <>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                <div style={{ marginBottom:12 }}>
+                  <label style={PROP_LABEL}>Mínimo</label>
+                  <input type="number" style={PROP_INP} value={comp.minVal??''} onChange={e=>onChange({minVal:e.target.value===''?undefined:Number(e.target.value)})}
+                    onFocus={e=>e.target.style.borderColor='#2563EB'} onBlur={e=>e.target.style.borderColor='#E2E8F0'} />
+                  {comp.minVal !== undefined && (
+                    <div style={{ display:'flex', gap:4, marginTop:5 }}>
+                      {([{ v:'>=' as const, label:'≥ (incluye)' }, { v:'>' as const, label:'> (excluye)' }]).map(opt => (
+                        <button key={opt.v} onClick={()=>onChange({minOp:opt.v})}
+                          style={{ flex:1, padding:'4px 0', borderRadius:6, border:`1.5px solid ${(comp.minOp??'>=')===opt.v?'#7C3AED':'#E2E8F0'}`, background:(comp.minOp??'>=')===opt.v?'#F5F3FF':'#fff', color:(comp.minOp??'>=')===opt.v?'#7C3AED':'#64748B', fontSize:10.5, fontWeight:(comp.minOp??'>=')===opt.v?700:400, cursor:'pointer' }}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginBottom:12 }}>
+                  <label style={PROP_LABEL}>Máximo</label>
+                  <input type="number" style={PROP_INP} value={comp.maxVal??''} onChange={e=>onChange({maxVal:e.target.value===''?undefined:Number(e.target.value)})}
+                    onFocus={e=>e.target.style.borderColor='#2563EB'} onBlur={e=>e.target.style.borderColor='#E2E8F0'} />
+                  {comp.maxVal !== undefined && (
+                    <div style={{ display:'flex', gap:4, marginTop:5 }}>
+                      {([{ v:'<=' as const, label:'≤ (incluye)' }, { v:'<' as const, label:'< (excluye)' }]).map(opt => (
+                        <button key={opt.v} onClick={()=>onChange({maxOp:opt.v})}
+                          style={{ flex:1, padding:'4px 0', borderRadius:6, border:`1.5px solid ${(comp.maxOp??'<=')===opt.v?'#7C3AED':'#E2E8F0'}`, background:(comp.maxOp??'<=')===opt.v?'#F5F3FF':'#fff', color:(comp.maxOp??'<=')===opt.v?'#7C3AED':'#64748B', fontSize:10.5, fontWeight:(comp.maxOp??'<=')===opt.v?700:400, cursor:'pointer' }}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div style={{ marginBottom:12 }}>
-                <label style={PROP_LABEL}>Máximo</label>
-                <input type="number" style={PROP_INP} value={comp.maxVal??''} onChange={e=>onChange({maxVal:e.target.value===''?undefined:Number(e.target.value)})}
-                  onFocus={e=>e.target.style.borderColor='#2563EB'} onBlur={e=>e.target.style.borderColor='#E2E8F0'} />
+              {onNumFormatChange && (
+                <div style={{ marginBottom:12 }}>
+                  <label style={PROP_LABEL}>Separador de miles / decimales</label>
+                  <div style={{ display:'flex', gap:6 }}>
+                    {([{ v:'.' as const, label:'1,234.56' }, { v:',' as const, label:'1.234,56' }]).map(opt => (
+                      <button key={opt.v} onClick={()=>onNumFormatChange(opt.v)}
+                        style={{ flex:1, padding:'6px 0', borderRadius:6, border:`1.5px solid ${(numFormat??'.')===opt.v?'#2563EB':'#E2E8F0'}`, background:(numFormat??'.')===opt.v?'#EFF6FF':'#fff', color:(numFormat??'.')===opt.v?'#2563EB':'#374151', fontSize:12, fontWeight:(numFormat??'.')===opt.v?700:400, cursor:'pointer', fontFamily:'var(--f-mono)' }}>
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:10.5, color:'#94A3B8', marginTop:5, lineHeight:1.4 }}>
+                    Se aplica a todos los campos número de este formulario.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {comp.type === 'datetime' && (
+            <div style={{ marginBottom:12 }}>
+              <label style={PROP_LABEL}>Qué mostrar</label>
+              <div style={{ display:'flex', gap:6 }}>
+                {([{ v:'ambos' as const, label:'Fecha y hora' }, { v:'fecha' as const, label:'Solo fecha' }, { v:'hora' as const, label:'Solo hora' }]).map(opt => (
+                  <button key={opt.v} onClick={()=>onChange({dateTimeMode:opt.v})}
+                    style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`1.5px solid ${(comp.dateTimeMode??'ambos')===opt.v?'#DB2777':'#E2E8F0'}`, background:(comp.dateTimeMode??'ambos')===opt.v?'#FDF4FF':'#fff', color:(comp.dateTimeMode??'ambos')===opt.v?'#DB2777':'#374151', fontSize:11, fontWeight:(comp.dateTimeMode??'ambos')===opt.v?700:400, cursor:'pointer' }}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(comp.type === 'datetime' && (comp.dateTimeMode??'ambos') !== 'hora') && (
+            <div style={{ marginBottom:12 }}>
+              <label style={PROP_LABEL}>Formato de fecha</label>
+              <select style={PROP_INP} value={comp.dateFormat ?? DATE_FORMATS[0].v} onChange={e=>onChange({dateFormat:e.target.value})}>
+                {DATE_FORMATS.map(f => <option key={f.v} value={f.v}>{f.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          {((comp.type === 'datetime' && (comp.dateTimeMode??'ambos') !== 'fecha') || comp.type === 'time') && (
+            <div style={{ marginBottom:12 }}>
+              <label style={PROP_LABEL}>Formato de hora</label>
+              <select style={PROP_INP} value={comp.timeFormat ?? TIME_FORMATS[0].v} onChange={e=>onChange({timeFormat:e.target.value})}>
+                {TIME_FORMATS.map(f => <option key={f.v} value={f.v}>{f.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          {comp.type === 'datagrid' && (
+            <div style={{ marginBottom:12 }}>
+              <div style={SEC_TITLE}>Grilla</div>
+              <label style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer' }}>
+                <input type="checkbox" checked={comp.disableAddRow??false} onChange={e=>onChange({disableAddRow:e.target.checked})} style={{ accentColor:'#0A2D63', width:15, height:15 }} />
+                <span style={{ fontSize:13, color:'#374151', fontWeight:500 }}>No permitir agregar/quitar filas</span>
+              </label>
+              <div style={{ fontSize:10.5, color:'#94A3B8', marginTop:6, lineHeight:1.4 }}>
+                Útil cuando la grilla debe tener siempre un número fijo de filas (ej: precargadas desde el diseño del formulario).
               </div>
             </div>
           )}
 
           {/* OP Mapping — only for input fields, not layout/firma/content types */}
-          {!['firma-seccion','columns','content','heading','image','divider','checkbox','radio','survey','button'].includes(comp.type) && (
+          {!['firma-seccion','columns','content','heading','image','divider','checkbox','radio','survey','button','datagrid','pdf'].includes(comp.type) && (
             <div style={{ marginTop:8 }}>
               <div style={SEC_TITLE}>Pre-llenado desde Orden de Proceso</div>
               <label style={PROP_LABEL}>Llenar automáticamente con</label>
@@ -1282,19 +1706,69 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
           <div style={{ fontSize:10, fontWeight:700, color:'#CBD5E1', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:10 }}>Columnas</div>
           <div style={{ marginBottom:14 }}>
             <label style={PROP_LABEL}>Número de columnas</label>
-            <div style={{ display:'flex', gap:6 }}>
-              {[2, 3, 4].map(n => (
-                <button key={n} onClick={() => onColumnCountChange?.(n)}
-                  style={{ flex:1, padding:'6px 0', borderRadius:6, border:`1.5px solid ${(comp.columnCount??2)===n?'#2563EB':'#E2E8F0'}`, background:(comp.columnCount??2)===n?'#EFF6FF':'#fff', color:(comp.columnCount??2)===n?'#2563EB':'#374151', cursor:'pointer', fontSize:12.5, fontWeight:(comp.columnCount??2)===n?700:400, transition:'all 100ms' }}>
-                  {n} col.
-                </button>
+            <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+              <input type="number" min={2} max={12} style={{ ...PROP_INP, width:70, textAlign:'center', flex:'0 0 auto' }}
+                value={colCount}
+                onChange={e => onColumnCountChange?.(Math.min(12, Math.max(2, parseInt(e.target.value) || 2)))} />
+              <div style={{ display:'flex', gap:4 }}>
+                {[2, 3, 4].map(n => (
+                  <button key={n} onClick={() => onColumnCountChange?.(n)}
+                    style={{ padding:'6px 10px', borderRadius:6, border:`1.5px solid ${colCount===n?'#2563EB':'#E2E8F0'}`, background:colCount===n?'#EFF6FF':'#fff', color:colCount===n?'#2563EB':'#374151', cursor:'pointer', fontSize:12, fontWeight:colCount===n?700:400, transition:'all 100ms' }}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div style={{ marginBottom:14 }}>
+            <label style={PROP_LABEL}>Ancho de cada columna (de 12)</label>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {colWidths.map((w, i) => (
+                <input key={i} type="number" min={1} max={12} value={w}
+                  style={{ ...PROP_INP, flex:'1 1 54px', minWidth:54, textAlign:'center' }}
+                  onChange={e => {
+                    const val = Math.min(12, Math.max(1, parseInt(e.target.value) || 1))
+                    const next = [...colWidths]; next[i] = val
+                    onChange({ columnWidths: next })
+                  }} />
               ))}
+            </div>
+            <div style={{ fontSize:10.5, color: colWidthsTotal===12 ? '#94A3B8' : '#D97706', marginTop:6 }}>
+              Suma actual: {colWidthsTotal} / 12{colWidthsTotal!==12 ? ' — lo ideal es que sume 12' : ''}
             </div>
           </div>
         </>
       )}
 
-      {hasVals && (
+      {comp.type === 'select' && (
+        <div style={{ marginBottom:12 }}>
+          <label style={PROP_LABEL}>Origen de las opciones</label>
+          <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+            {([{ v:'manual' as const, label:'Manual' }, { v:'materiales' as const, label:'Catálogo de Materiales' }]).map(opt => (
+              <button key={opt.v} onClick={()=>onChange({dataSource:opt.v})}
+                style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`1.5px solid ${(comp.dataSource??'manual')===opt.v?'#DC2626':'#E2E8F0'}`, background:(comp.dataSource??'manual')===opt.v?'#FEF2F2':'#fff', color:(comp.dataSource??'manual')===opt.v?'#DC2626':'#374151', fontSize:11, fontWeight:(comp.dataSource??'manual')===opt.v?700:400, cursor:'pointer' }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {comp.dataSource === 'materiales' && (
+            <>
+              <label style={PROP_LABEL}>Filtrar por tipo de material</label>
+              <select style={PROP_INP} value={comp.dataSourceTipo ?? ''} onChange={e=>onChange({dataSourceTipo:e.target.value})}>
+                <option value="">Todos los tipos</option>
+                {(Object.keys(TIPO_MATERIAL_LABELS) as TipoMaterial[]).map(t => (
+                  <option key={t} value={t}>{TIPO_MATERIAL_LABELS[t]}</option>
+                ))}
+              </select>
+              <div style={{ fontSize:10.5, color:'#94A3B8', marginTop:6, lineHeight:1.4 }}>
+                La lista se llena automáticamente con los materiales activos del catálogo (filtrados por tipo, si eliges uno) cada vez que se abre el Batch Record — no hace falta escribirla a mano.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {hasVals && (comp.type !== 'select' || (comp.dataSource ?? 'manual') === 'manual') && (
         <div style={{ marginBottom:12 }}>
           <label style={PROP_LABEL}>Opciones (una por línea)</label>
           <textarea style={{ ...PROP_INP, resize:'vertical', minHeight:80, fontFamily:'var(--f-mono)', fontSize:12.5 }}
@@ -1343,6 +1817,34 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
               }}
               placeholder={'Conforme\nNo conforme\nN/A'}
               onFocus={e=>e.target.style.borderColor='#0891B2'} onBlur={e=>e.target.style.borderColor='#E2E8F0'} />
+          </div>
+          {pi('Título de la columna de preguntas', comp.surveyQuestionHeader ?? 'Pregunta', v=>onChange({surveyQuestionHeader:v}), 'Pregunta')}
+
+          <div style={{ marginTop:8 }}>
+            <div style={SEC_TITLE}>Bloqueo por respuesta</div>
+            <label style={PROP_LABEL}>Si se selecciona esta opción...</label>
+            <select style={PROP_INP} value={comp.lockOnValue ?? ''} onChange={e=>onChange({lockOnValue: e.target.value || undefined})}>
+              <option value="">— No bloquear nada —</option>
+              {(comp.surveyColumns ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            {comp.lockOnValue && (
+              <div style={{ marginTop:10 }}>
+                <label style={PROP_LABEL}>...bloquear</label>
+                <div style={{ display:'flex', gap:6 }}>
+                  {([{ v:'linea' as const, label:'Solo esa pregunta' }, { v:'encuesta' as const, label:'Toda la encuesta' }]).map(opt => (
+                    <button key={opt.v} onClick={()=>onChange({lockScope:opt.v})}
+                      style={{ flex:1, padding:'6px 4px', borderRadius:6, border:`1.5px solid ${(comp.lockScope??'linea')===opt.v?'#0891B2':'#E2E8F0'}`, background:(comp.lockScope??'linea')===opt.v?'#ECFEFF':'#fff', color:(comp.lockScope??'linea')===opt.v?'#0891B2':'#374151', fontSize:11, fontWeight:(comp.lockScope??'linea')===opt.v?700:400, cursor:'pointer' }}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize:10.5, color:'#94A3B8', marginTop:6, lineHeight:1.4 }}>
+                  {(comp.lockScope??'linea')==='linea'
+                    ? 'Al elegir esa opción, esa pregunta queda fija — no se puede cambiar después.'
+                    : 'Al elegir esa opción, toda la encuesta queda fija — el resto del formulario sigue editable.'}
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -1411,6 +1913,10 @@ function PropertiesPanel({ comp, onChange, onDelete, onColumnCountChange }: {
           <label style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer', marginBottom:9 }}>
             <input type="checkbox" checked={comp.hideLabel??false} onChange={e=>onChange({hideLabel:e.target.checked})} style={{ accentColor:'#2563EB', width:15, height:15 }} />
             <span style={{ fontSize:13, color:'#374151', fontWeight:500 }}>Ocultar etiqueta</span>
+          </label>
+          <label style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer', marginBottom:9 }}>
+            <input type="checkbox" checked={comp.disabled??false} onChange={e=>onChange({disabled:e.target.checked})} style={{ accentColor:'#2563EB', width:15, height:15 }} />
+            <span style={{ fontSize:13, color:'#374151', fontWeight:500 }}>Deshabilitado</span>
           </label>
         </>
       )}
@@ -1586,18 +2092,24 @@ function ImportJsonModal({ onClose, onImport }: {
 
 // ─── PreviewFirmaModal ────────────────────────────────────────────────────────
 
-function validateFirmaCredentials(loginInput: string, pwd: string, grupoRequerido: string): string | null {
-  const u = mockUsuarios.find(x => x.login === loginInput.trim() || x.email === loginInput.trim())
-  if (!u)        return 'Usuario no encontrado'
-  if (!u.activo) return 'Usuario inactivo'
-  if (u.bloqueado) return 'Usuario bloqueado'
-  if (pwd !== 'bacord2025') return 'Contraseña incorrecta'
-  if (u.esAdministrador !== 1) {
-    const grupos = u.grupos.split(',').map(g => g.trim()).filter(Boolean)
-    if (!grupos.includes(grupoRequerido))
-      return `"${u.nombres} ${u.apellidos}" no pertenece al grupo "${grupoRequerido}"`
+async function validateFirmaCredentials(loginInput: string, pwd: string, grupoRequerido: string): Promise<string | null> {
+  const login = loginInput.trim()
+  try {
+    const usuarios = await usuariosApi.listar()
+    const u = usuarios.find(x => x.login === login)
+    if (!u) return 'Usuario no encontrado'
+    if (!u.activo) return 'Usuario inactivo'
+    if (u.bloqueado) return 'Usuario bloqueado'
+    if (u.esAdministrador === 0) {
+      const grupos = (u.grupos ?? '').split(',').map(g => g.trim()).filter(Boolean)
+      if (!grupos.includes(grupoRequerido))
+        return `"${u.nombres} ${u.apellidos}" no pertenece al grupo "${grupoRequerido}"`
+    }
+    const res = await authApi.validarFirma(login, pwd)
+    return res.estado ? null : res.mensaje
+  } catch {
+    return 'No se pudo validar las credenciales'
   }
-  return null
 }
 
 function PreviewFirmaModal({ firma, onConfirm, onClose }: {
@@ -1609,10 +2121,13 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
   const [pwd,   setPwd]   = useState('')
   const [show,  setShow]  = useState(false)
   const [err,   setErr]   = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const msg = validateFirmaCredentials(login, pwd, firma.grupo)
+    setLoading(true)
+    const msg = await validateFirmaCredentials(login, pwd, firma.grupo)
+    setLoading(false)
     if (msg) { setErr(msg); return }
     onConfirm()
   }
@@ -1677,7 +2192,7 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
           </div>
           <div style={{ padding:'12px 20px', borderTop:'1px solid var(--hair)', display:'flex', justifyContent:'flex-end', gap:8 }}>
             <button type="button" className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
-            <button type="submit" className="btn btn-primary" disabled={!login || !pwd}><i className="fa fa-pen" /> Firmar</button>
+            <button type="submit" className="btn btn-primary" disabled={!login || !pwd || loading}>{loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-pen" /> Firmar</>}</button>
           </div>
         </form>
       </div>
@@ -1692,7 +2207,12 @@ function FormularioPanel({ detalle, onClose, onSave }: {
   detalle: Detalle; onClose: () => void
   onSave: (jsonSchema: string, jsonData: string, jsonOptions: string) => void
 }) {
+  const puedeEditar = usePuedeEditar('detalles')
   const [comps, setComps]       = useState<FormComp[]>(() => loadComps(detalle))
+  const [numFormat, setNumFormat] = useState<NumberFormat>(() => {
+    try { return (JSON.parse(detalle.jsonOptions || '{}').numberFormat as NumberFormat) ?? '.' }
+    catch { return '.' }
+  })
   const [selected, setSelected] = useState<string | null>(null)
   const [tab, setTab]           = useState<'builder'|'preview'|'json'>('builder')
   const [search, setSearch]     = useState('')
@@ -1701,15 +2221,28 @@ function FormularioPanel({ detalle, onClose, onSave }: {
   const [showImport, setShowImport]   = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [renderH, setRenderH]   = useState(480)
+  const [previewMounted, setPreviewMounted] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(true)
+  const [previewFailed, setPreviewFailed]   = useState(false)
+  const previewReadyRef = useRef(false)
+  const pendingPreviewRef = useRef<string | null>(null)
+  const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [firmadosPreview, setFirmadosPreview] = useState<Record<string, boolean>>({})
   const [savedToast, setSavedToast] = useState(false)
   const [firmaPreview, setFirmaPreview] = useState<{ firmaKey: string; texto: string; grupo: string } | null>(null)
   const [undoDelete, setUndoDelete] = useState<{ comp: FormComp; idx: number; label: string } | null>(null)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [propsFloating, setPropsFloating] = useState(false)
+  const [floatPos, setFloatPos]   = useState({ x: 0, y: 0 })
+  const [floatSize, setFloatSize] = useState({ w: 420, h: 560 })
+  const floatDragRef = useRef<{ mode: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number } | null>(null)
   const renderRef  = useRef<HTMLIFrameElement>(null)
   const dragSrcRef = useRef<{ from:'palette'; type: CompType } | { from:'canvas'; id: string } | null>(null)
   const compsRef   = useRef(comps)
   compsRef.current = comps
+  const numFormatRef = useRef(numFormat)
+  numFormatRef.current = numFormat
+  const langFor = () => numFormatRef.current === ',' ? 'es' : 'en'
 
   const selComp = selected ? findComp(comps, selected) : undefined
 
@@ -1721,20 +2254,99 @@ function FormularioPanel({ detalle, onClose, onSave }: {
       if (ev.data?.type === 'FIRMA_PREVIEW') {
         setFirmaPreview({ firmaKey: ev.data.firmaKey, texto: ev.data.texto, grupo: ev.data.grupo })
       }
+      if (ev.data?.type === 'IFRAME_READY') {
+        previewReadyRef.current = true
+        setPreviewLoading(false)
+        setPreviewFailed(false)
+        if (previewTimeoutRef.current) { clearTimeout(previewTimeoutRef.current); previewTimeoutRef.current = null }
+        if (pendingPreviewRef.current !== null) {
+          renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: pendingPreviewRef.current, language: langFor() }, '*')
+          pendingPreviewRef.current = null
+        }
+      }
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
   }, [])
 
+  // Sends the current schema to the preview iframe. If the iframe's own message listener
+  // isn't wired up yet (still downloading formio.full.min.js from the CDN), the schema is
+  // queued and flushed automatically once the iframe reports IFRAME_READY — this replaces a
+  // fixed 200ms guess that was the root cause of the preview intermittently not loading.
   const sendToPreview = (f?: Record<string, boolean>) => {
     const next = f ?? firmadosPreview
-    renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: toFormio(compsRef.current, next) }, '*')
+    const json = injectMaterialesEnPreview(toFormio(compsRef.current, next))
+    if (previewReadyRef.current) {
+      renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: json, language: langFor() }, '*')
+    } else {
+      pendingPreviewRef.current = json
+    }
+  }
+
+  const changeNumFormat = (f: NumberFormat) => { setNumFormat(f); setTimeout(() => sendToPreview(), 30) }
+
+  const armPreviewTimeout = () => {
+    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current)
+    previewTimeoutRef.current = setTimeout(() => { if (!previewReadyRef.current) setPreviewFailed(true) }, 12000)
   }
 
   const switchPreview = () => {
     setTab('preview')
-    setTimeout(() => sendToPreview(), 200)
+    if (!previewMounted) {
+      // First time opening the preview in this session: mount the iframe (which loads the
+      // CDN scripts once) and queue the current schema for when it signals ready.
+      previewReadyRef.current = false
+      pendingPreviewRef.current = injectMaterialesEnPreview(toFormio(compsRef.current, firmadosPreview))
+      setPreviewLoading(true)
+      setPreviewFailed(false)
+      setPreviewMounted(true)
+      armPreviewTimeout()
+    } else {
+      sendToPreview()
+    }
   }
+
+  const reloadPreview = () => {
+    previewReadyRef.current = false
+    pendingPreviewRef.current = injectMaterialesEnPreview(toFormio(compsRef.current, firmadosPreview))
+    setPreviewLoading(true)
+    setPreviewFailed(false)
+    if (renderRef.current) renderRef.current.src = '/formio/render.html?t=' + Date.now()
+    armPreviewTimeout()
+  }
+
+  const openFloatingProps = () => {
+    setFloatPos({ x: Math.max(20, window.innerWidth - 460), y: 110 })
+    setFloatSize({ w: 420, h: 560 })
+    setPropsFloating(true)
+  }
+
+  const startFloatDrag = (mode: 'move' | 'resize') => (e: React.MouseEvent) => {
+    e.preventDefault()
+    floatDragRef.current = { mode, startX: e.clientX, startY: e.clientY, origX: floatPos.x, origY: floatPos.y, origW: floatSize.w, origH: floatSize.h }
+  }
+
+  useEffect(() => {
+    if (!propsFloating) return
+    const onMove = (e: MouseEvent) => {
+      const d = floatDragRef.current
+      if (!d) return
+      const dx = e.clientX - d.startX
+      const dy = e.clientY - d.startY
+      if (d.mode === 'move') {
+        setFloatPos({
+          x: Math.min(Math.max(0, d.origX + dx), window.innerWidth - 120),
+          y: Math.min(Math.max(0, d.origY + dy), window.innerHeight - 60),
+        })
+      } else {
+        setFloatSize({ w: Math.max(320, d.origW + dx), h: Math.max(300, d.origH + dy) })
+      }
+    }
+    const onUp = () => { floatDragRef.current = null }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [propsFloating])
 
   const confirmFirmaPreview = () => {
     if (!firmaPreview) return
@@ -1830,7 +2442,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
     setComps(cs => {
       const patch = (comps: FormComp[]): FormComp[] => comps.map(c => {
         if (c.id === compId) return {
-          ...c, columnCount: n,
+          ...c, columnCount: n, columnWidths: undefined,
           components: (c.components ?? []).map(ch => ({ ...ch, _colIdx: Math.min(ch._colIdx ?? 0, n - 1) }))
         }
         if (c.components) return { ...c, components: patch(c.components) }
@@ -1934,7 +2546,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
       {/* Header */}
       <div style={{ background:'var(--navy)', padding:'12px 20px', display:'flex', alignItems:'center', gap:12, flexShrink:0, flexWrap:'wrap' }}>
         <div style={{ width:34, height:34, borderRadius:10, background:'rgba(255,255,255,.12)', display:'grid', placeItems:'center', flexShrink:0 }}>
-          <i className="fa fa-wpforms" style={{ color:'var(--yellow)', fontSize:16 }} />
+          <i className="fa fa-clipboard-list" style={{ color:'var(--yellow)', fontSize:16 }} />
         </div>
         <div>
           <div style={{ color:'#fff', fontWeight:700, fontSize:14 }}>Editor de formulario</div>
@@ -1949,12 +2561,16 @@ function FormularioPanel({ detalle, onClose, onSave }: {
           <button style={tabSt(tab==='json')} onClick={()=>setTab('json')}><i className="fa fa-code" style={{ marginRight:5 }} />JSON</button>
         </div>
         <div style={{ display:'flex', gap:6, marginLeft:8 }}>
-          <button className="btn btn-gray" style={{ fontSize:12, padding:'6px 12px', background:'rgba(255,255,255,.1)', color:'rgba(255,255,255,.8)', border:'1.5px solid rgba(255,255,255,.2)' }} onClick={()=>setShowImport(true)}>
-            <i className="fa fa-file-import" /> Importar JSON
-          </button>
-          <button className="btn btn-primary" style={{ fontSize:12, padding:'6px 16px' }} onClick={() => { try { onSave(toFormio(comps), JSON.stringify(comps), '{}'); setSavedToast(true); setTimeout(() => setSavedToast(false), 2500) } catch(e) { console.error('Error al guardar detalle:', e) } }}>
-            <i className="fa fa-save" /> Grabar
-          </button>
+          {puedeEditar && (
+            <button className="btn btn-gray" style={{ fontSize:12, padding:'6px 12px', background:'rgba(255,255,255,.1)', color:'rgba(255,255,255,.8)', border:'1.5px solid rgba(255,255,255,.2)' }} onClick={()=>setShowImport(true)}>
+              <i className="fa fa-file-import" /> Importar JSON
+            </button>
+          )}
+          {puedeEditar && (
+            <button className="btn btn-primary" style={{ fontSize:12, padding:'6px 16px' }} onClick={() => { try { onSave(toFormio(comps), JSON.stringify(comps), JSON.stringify({ numberFormat: numFormat })); setSavedToast(true); setTimeout(() => setSavedToast(false), 2500) } catch(e) { console.error('Error al guardar detalle:', e) } }}>
+              <i className="fa fa-save" /> Grabar
+            </button>
+          )}
           <button className="btn btn-gray" style={{ fontSize:12, padding:'6px 14px' }} onClick={onClose}>
             <i className="fa fa-arrow-left" /> Retornar
           </button>
@@ -2167,7 +2783,17 @@ function FormularioPanel({ detalle, onClose, onSave }: {
 
           {/* Properties */}
           <div style={{ borderLeft:'1px solid #E2E8F0', display:'flex', flexDirection:'column', overflow:'hidden', background:'#fff' }}>
-            {!selComp ? (
+            {propsFloating ? (
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:10, color:'#94A3B8', padding:24, textAlign:'center' }}>
+                <div style={{ width:48, height:48, borderRadius:14, background:'#F1F5F9', display:'grid', placeItems:'center' }}>
+                  <i className="fa fa-window-restore" style={{ fontSize:18, color:'#CBD5E1' }} />
+                </div>
+                <div style={{ fontWeight:700, fontSize:13.5, color:'#475569' }}>Panel extraído</div>
+                <button className="btn btn-gray" style={{ fontSize:11.5, padding:'6px 14px' }} onClick={()=>setPropsFloating(false)}>
+                  <i className="fa fa-thumbtack" /> Anclar de nuevo
+                </button>
+              </div>
+            ) : !selComp ? (
               <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:10, color:'#94A3B8', padding:24, textAlign:'center' }}>
                 <div style={{ width:48, height:48, borderRadius:14, background:'#F1F5F9', display:'grid', placeItems:'center' }}>
                   <i className="fa fa-sliders-h" style={{ fontSize:20, color:'#CBD5E1' }} />
@@ -2189,13 +2815,18 @@ function FormularioPanel({ detalle, onClose, onSave }: {
                           <div style={{ fontSize:12, fontWeight:700, color:'#0F172A' }}>{pp2.label}</div>
                           <div style={{ fontSize:10.5, color:'#94A3B8', fontFamily:'var(--f-mono)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{selComp.key || toKey(selComp.label)}</div>
                         </div>
+                        <button onClick={openFloatingProps} title="Extraer panel de propiedades"
+                          style={{ background:'#fff', border:'1.5px solid #E2E8F0', borderRadius:6, width:24, height:24, display:'grid', placeItems:'center', cursor:'pointer', color:'#64748B', flexShrink:0 }}>
+                          <i className="fa fa-window-restore" style={{ fontSize:10 }} />
+                        </button>
                       </div>
                     )
                   })()}
                 </div>
                 <div style={{ flex:1, overflow:'auto' }}>
                   <PropertiesPanel comp={selComp} onChange={p=>updComp(selComp.id,p)} onDelete={()=>removeComp(selComp.id)}
-                    onColumnCountChange={selComp.type==='columns' ? n=>changeColumnsCount(selComp.id,n) : undefined} />
+                    onColumnCountChange={selComp.type==='columns' ? n=>changeColumnsCount(selComp.id,n) : undefined}
+                    numFormat={numFormat} onNumFormatChange={changeNumFormat} />
                 </div>
               </>
             )}
@@ -2204,9 +2835,43 @@ function FormularioPanel({ detalle, onClose, onSave }: {
         </div>
       )}
 
-      {/* Preview */}
-      {tab==='preview' && (
-        <div style={{ padding:20, background:'#F0F2F5', flex:1, minHeight:480, overflow:'auto' }}>
+      {propsFloating && createPortal(
+        <div style={{ position:'fixed', left:floatPos.x, top:floatPos.y, width:floatSize.w, height:floatSize.h, background:'#fff', border:'1.5px solid #CBD5E1', borderRadius:12, boxShadow:'0 12px 40px rgba(10,21,48,.22)', zIndex:1200, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <div onMouseDown={startFloatDrag('move')}
+            style={{ cursor:'move', padding:'8px 12px', background:'#0A2D63', color:'#fff', display:'flex', alignItems:'center', gap:8, userSelect:'none', flexShrink:0 }}>
+            <i className="fa fa-grip-vertical" style={{ opacity:.6, fontSize:11 }} />
+            <span style={{ fontSize:12, fontWeight:700, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {selComp ? (PAL_MAP[selComp.type]?.label ?? selComp.type) : 'Propiedades'}
+              {selComp && <span style={{ opacity:.6, fontWeight:400, marginLeft:6, fontFamily:'var(--f-mono)', fontSize:11 }}>{selComp.key || toKey(selComp.label)}</span>}
+            </span>
+            <button onClick={()=>setPropsFloating(false)} title="Anclar en el panel lateral"
+              style={{ background:'rgba(255,255,255,.12)', border:'none', color:'#fff', width:24, height:24, borderRadius:6, cursor:'pointer', display:'grid', placeItems:'center', fontSize:11, flexShrink:0 }}>
+              <i className="fa fa-thumbtack" />
+            </button>
+          </div>
+          <div style={{ flex:1, overflow:'auto' }}>
+            {selComp ? (
+              <PropertiesPanel comp={selComp} onChange={p=>updComp(selComp.id,p)} onDelete={()=>removeComp(selComp.id)}
+                onColumnCountChange={selComp.type==='columns' ? n=>changeColumnsCount(selComp.id,n) : undefined}
+                numFormat={numFormat} onNumFormatChange={changeNumFormat} />
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:10, color:'#94A3B8', padding:24, textAlign:'center' }}>
+                <div style={{ fontSize:12, lineHeight:1.6 }}>Selecciona un campo para editar sus propiedades</div>
+              </div>
+            )}
+          </div>
+          <div onMouseDown={startFloatDrag('resize')} title="Redimensionar"
+            style={{ position:'absolute', right:0, bottom:0, width:18, height:18, cursor:'nwse-resize' }}>
+            <i className="fa fa-grip-lines" style={{ position:'absolute', right:3, bottom:3, fontSize:9, color:'#CBD5E1', transform:'rotate(-45deg)' }} />
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Preview — kept mounted (display:none when inactive) once first opened, so the CDN-loaded
+          formio bundle is fetched only once per editing session instead of on every tab switch */}
+      {previewMounted && (
+        <div style={{ padding:20, background:'#F0F2F5', flex:1, minHeight:480, overflow:'auto', display: tab==='preview' ? 'block' : 'none' }}>
           <div style={{ maxWidth:'100%', margin:'0 auto' }}>
             <div style={{ background:'#E8EAED', borderRadius:'12px 12px 0 0', padding:'10px 14px', display:'flex', alignItems:'center', gap:8, border:'1px solid #D1D5DB', borderBottom:'none' }}>
               <div style={{ display:'flex', gap:5 }}>
@@ -2226,7 +2891,22 @@ function FormularioPanel({ detalle, onClose, onSave }: {
                 </button>
               )}
             </div>
-            <div style={{ background:'#fff', border:'1px solid #D1D5DB', borderTop:'none', borderRadius:'0 0 12px 12px', overflow:'hidden', boxShadow:'0 8px 32px rgba(0,0,0,.08)' }}>
+            <div style={{ background:'#fff', border:'1px solid #D1D5DB', borderTop:'none', borderRadius:'0 0 12px 12px', overflow:'hidden', boxShadow:'0 8px 32px rgba(0,0,0,.08)', position:'relative' }}>
+              {previewLoading && !previewFailed && (
+                <div style={{ position:'absolute', inset:0, zIndex:2, background:'#fff', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, minHeight:220 }}>
+                  <i className="fa fa-spinner fa-spin" style={{ fontSize:20, color:'#0A2D63' }} />
+                  <div style={{ fontSize:12.5, color:'#6B7280' }}>Cargando vista previa…</div>
+                </div>
+              )}
+              {previewFailed && (
+                <div style={{ position:'absolute', inset:0, zIndex:2, background:'#fff', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, minHeight:220, padding:20, textAlign:'center' }}>
+                  <i className="fa fa-exclamation-triangle" style={{ fontSize:20, color:'#DC2626' }} />
+                  <div style={{ fontSize:12.5, color:'#374151', maxWidth:340 }}>No se pudo cargar la vista previa. Verifique la conexión a internet e intente de nuevo.</div>
+                  <button onClick={reloadPreview} className="btn btn-primary" style={{ fontSize:12 }}>
+                    <i className="fa fa-redo" /> Reintentar
+                  </button>
+                </div>
+              )}
               <iframe ref={renderRef} src="/formio/render.html" title="Form Preview"
                 style={{ width:'100%', height:renderH, border:'none', display:'block', minHeight:220 }} />
             </div>
@@ -2251,7 +2931,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
 
       {savedToast && (
         <div style={{ position:'fixed', bottom:24, right:24, background:'#065F46', color:'#fff', padding:'10px 18px', borderRadius:8, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', gap:8, boxShadow:'0 4px 24px rgba(0,0,0,.18)', zIndex:9999 }}>
-          <i className="fa fa-check-circle" /> Detalle guardado correctamente
+          <i className="fa fa-check-circle" /> Formulario guardado correctamente
         </div>
       )}
 
@@ -2273,11 +2953,17 @@ function FormularioPanel({ detalle, onClose, onSave }: {
 
 // ─── EstadoBadge ──────────────────────────────────────────────────────────────
 
+const ESTADO_CFG: Record<string, { bg: string; color: string; dot: string }> = {
+  'Activo':      { bg:'#dcfce7', color:'#166534', dot:'#16a34a' },
+  'En creación': { bg:'#fef3c7', color:'#92400e', dot:'#d97706' },
+  'Obsoleto':    { bg:'#f1f5f9', color:'#64748b', dot:'#94a3b8' },
+}
+
 function EstadoBadge({ estado }: { estado: string }) {
-  const ok = estado==='Activo'
+  const cfg = ESTADO_CFG[estado] ?? ESTADO_CFG.Obsoleto
   return (
-    <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'2px 10px', borderRadius:100, fontSize:11.5, fontWeight:600, fontFamily:'var(--f-mono)', background:ok?'#dcfce7':'#f1f5f9', color:ok?'#166534':'#64748b' }}>
-      <span style={{ width:6, height:6, borderRadius:'50%', background:ok?'#16a34a':'#94a3b8', display:'inline-block' }} />
+    <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'2px 10px', borderRadius:100, fontSize:11.5, fontWeight:600, fontFamily:'var(--f-mono)', background:cfg.bg, color:cfg.color }}>
+      <span style={{ width:6, height:6, borderRadius:'50%', background:cfg.dot, display:'inline-block' }} />
       {estado}
     </span>
   )
@@ -2285,25 +2971,56 @@ function EstadoBadge({ estado }: { estado: string }) {
 
 // ─── DetallesList ─────────────────────────────────────────────────────────────
 
-type ModalMode = 'crear' | 'modificar' | 'copiar' | 'eliminar' | null
+type ModalMode = 'crear' | 'modificar' | 'copiar' | 'obsoleto' | null
+
+function toLocalDetalle(d: { id: number; codigo: string; descripcion: string; estado: EstadoFormulario; idEstrategiaFirma?: number | null; jsonSchema: string; jsonData?: string | null; jsonOptions?: string | null }): Detalle {
+  return {
+    id: d.id, codigo: d.codigo, descripcion: d.descripcion, estado: d.estado,
+    idEstrategiaFirma: d.idEstrategiaFirma ?? undefined,
+    jsonSchema: d.jsonSchema ?? '', jsonData: d.jsonData ?? '', jsonOptions: d.jsonOptions ?? '',
+  }
+}
 
 export function DetallesList() {
-  const [data,       setData]      = useState<Detalle[]>(() => [...getDetalles()])
+  const puedeEditar = usePuedeEditar('detalles')
+  const [data,       setData]      = useState<Detalle[]>([])
+  const [loading,    setLoading]   = useState(true)
   const [busqueda,   setBusqueda]  = useState('')
+  const [estadoFiltro, setEstadoFiltro] = useState('')
+  const [estrategiaFiltro, setEstrategiaFiltro] = useState('')
   const [mode,       setMode]      = useState<ModalMode>(null)
   const [selected,   setSelected]  = useState<Detalle | null>(null)
   const [formulario, setFormulario] = useState<Detalle | null>(null)
   const [copiarInst, setCopiarInst] = useState(false)
-  const [form,   setForm]   = useState({ codigo:'', descripcion:'', estado:'Activo' as 'Activo'|'Inactivo', idEstrategiaFirma: undefined as number | undefined })
+  const [form,   setForm]   = useState({ codigo:'', descripcion:'', estado:'En creación' as EstadoFormulario, idEstrategiaFirma: undefined as number | undefined })
   const [errors, setErrors] = useState<Record<string, string>>({})
 
-  const filtered = data.filter(d => !busqueda || d.codigo.toLowerCase().includes(busqueda.toLowerCase()) || d.descripcion.toLowerCase().includes(busqueda.toLowerCase()))
+  const [, forceRender] = useState(0)
+  const cargar = () => {
+    detallesApi.listar().then(ds => setData(ds.map(toLocalDetalle))).finally(() => setLoading(false))
+    estrategiasFirmaApi.listar().then(efs => { _estrategiasFirmaCache = efs; forceRender(n => n + 1) })
+    materialesApi.listar().then(mats => { _materialesCache = mats })
+  }
+  useEffect(() => { cargar() }, [])
+
+  const filtered = data.filter(d =>
+    (!busqueda || d.codigo.toLowerCase().includes(busqueda.toLowerCase()) || d.descripcion.toLowerCase().includes(busqueda.toLowerCase())) &&
+    (!estadoFiltro || d.estado === estadoFiltro) &&
+    (!estrategiaFiltro || String(d.idEstrategiaFirma ?? '') === estrategiaFiltro)
+  )
+  const hayFiltros = !!(busqueda || estadoFiltro || estrategiaFiltro)
+  const limpiarFiltros = () => { setBusqueda(''); setEstadoFiltro(''); setEstrategiaFiltro('') }
   const set = (k: string, v: string) => { setForm(f=>({...f,[k]:v})); setErrors(e=>({...e,[k]:''})) }
 
-  const openCrear  = () => { setForm({codigo:'',descripcion:'',estado:'Activo',idEstrategiaFirma:undefined}); setSelected(null); setErrors({}); setMode('crear') }
+  const handleReactivar = async (r: Detalle) => {
+    await detallesApi.actualizar(r.id, { estado: 'Activo' })
+    cargar()
+  }
+
+  const openCrear  = () => { setForm({codigo:'',descripcion:'',estado:'En creación',idEstrategiaFirma:undefined}); setSelected(null); setErrors({}); setMode('crear') }
   const openMod    = (r: Detalle) => { setForm({codigo:r.codigo,descripcion:r.descripcion,estado:r.estado,idEstrategiaFirma:r.idEstrategiaFirma}); setSelected(r); setErrors({}); setMode('modificar') }
-  const openCopiar = (r: Detalle) => { setForm({codigo:r.codigo+'-C',descripcion:r.descripcion+' (copia)',estado:r.estado,idEstrategiaFirma:r.idEstrategiaFirma}); setSelected(r); setCopiarInst(false); setErrors({}); setMode('copiar') }
-  const openElim   = (r: Detalle) => { setSelected(r); setMode('eliminar') }
+  const openCopiar = (r: Detalle) => { setForm({codigo:r.codigo+'-C',descripcion:r.descripcion+' (copia)',estado:'En creación',idEstrategiaFirma:r.idEstrategiaFirma}); setSelected(r); setCopiarInst(false); setErrors({}); setMode('copiar') }
+  const openObsoleto = (r: Detalle) => { setSelected(r); setMode('obsoleto') }
 
   const validate = () => {
     const e: Record<string,string> = {}
@@ -2313,21 +3030,31 @@ export function DetallesList() {
     setErrors(e); return !Object.keys(e).length
   }
 
-  const persist = (next: Detalle[]) => { setDetalles(next); setData(next) }
-
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!validate()) return
-    if (mode==='crear') persist([...data,{id:bumpDetId(),codigo:form.codigo.trim(),descripcion:form.descripcion.trim(),estado:form.estado,idEstrategiaFirma:form.idEstrategiaFirma,jsonSchema:'',jsonData:'',jsonOptions:''}])
-    else if (mode==='modificar'&&selected) persist(data.map(x=>x.id===selected.id?{...x,...form}:x))
-    else if (mode==='copiar'&&selected)    persist([...data,{id:bumpDetId(),codigo:form.codigo.trim(),descripcion:form.descripcion.trim(),estado:form.estado,idEstrategiaFirma:form.idEstrategiaFirma,jsonSchema:copiarInst?selected.jsonSchema:'',jsonData:copiarInst?selected.jsonData:'',jsonOptions:''}])
+    if (mode==='crear') {
+      await detallesApi.crear({ codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null, jsonSchema: '', jsonData: '', jsonOptions: '' })
+    } else if (mode==='modificar' && selected) {
+      await detallesApi.actualizar(selected.id, { codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null })
+    } else if (mode==='copiar' && selected) {
+      await detallesApi.crear({
+        codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null,
+        jsonSchema: copiarInst ? selected.jsonSchema : '', jsonData: copiarInst ? selected.jsonData : '', jsonOptions: '',
+      })
+    }
     setMode(null)
+    cargar()
   }
 
-  const handleElim = () => { if (selected) persist(data.filter(x=>x.id!==selected.id)); setMode(null) }
-  const handleSaveForm = (jsonSchema: string, jsonData: string, jsonOptions: string) => {
+  const handleObsoleto = async () => {
+    if (selected) await detallesApi.eliminar(selected.id)
+    setMode(null)
+    cargar()
+  }
+  const handleSaveForm = async (jsonSchema: string, jsonData: string, jsonOptions: string) => {
     if (formulario) {
-      const next = data.map(x => x.id===formulario.id ? {...x,jsonSchema,jsonData,jsonOptions} : x)
-      persist(next)
+      await detallesApi.actualizar(formulario.id, { jsonSchema, jsonData, jsonOptions })
+      setData(ds => ds.map(x => x.id===formulario.id ? {...x,jsonSchema,jsonData,jsonOptions} : x))
       setFormulario(f => f ? {...f,jsonSchema,jsonData,jsonOptions} : null)
     }
   }
@@ -2341,7 +3068,7 @@ export function DetallesList() {
       render:r=>{ const n=countComps(r.jsonSchema); return <span style={{ fontFamily:'var(--f-mono)', fontSize:11.5, background:n>0?'#EFF6FF':'var(--paper-2)', padding:'2px 9px', borderRadius:6, color:n>0?'var(--navy)':'var(--ink-4)', fontWeight:n>0?700:400 }}>{n>0?n:'—'}</span> }},
     { key:'idEstrategiaFirma', header:'Estrategia cierre', width:'16%',
       render: r => {
-        const ef = r.idEstrategiaFirma ? mockEstrategiasFirma.find(e => e.id === r.idEstrategiaFirma) : null
+        const ef = r.idEstrategiaFirma ? _estrategiasFirmaCache.find(e => e.id === r.idEstrategiaFirma) : null
         return ef
           ? <div><span style={{ fontFamily:'var(--f-mono)', fontSize:11, color:'var(--navy)', fontWeight:600 }}>{ef.codigo}</span><div style={{ fontSize:11, color:'var(--ink-4)', marginTop:1 }}>{ef.descripcion}</div></div>
           : <span style={{ color:'var(--ink-4)', fontSize:12 }}>—</span>
@@ -2351,28 +3078,39 @@ export function DetallesList() {
       render:r=>(
         <div style={{ display:'flex', gap:6, justifyContent:'center', alignItems:'center' }}>
           {/* Utility pill: edit / copy / delete grouped together */}
-          <div style={{ display:'flex', alignItems:'center', gap:1, padding:3, background:'#F1F5F9', borderRadius:9, border:'1px solid #E2E8F0' }}>
-            <button title="Editar metadatos" onClick={()=>openMod(r)}
-              style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#94A3B8', fontSize:12, display:'grid', placeItems:'center', transition:'all 80ms' }}
-              onMouseEnter={e=>{e.currentTarget.style.background='#fff';e.currentTarget.style.color='#16A34A';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,.08)'}}
-              onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#94A3B8';e.currentTarget.style.boxShadow='none'}}>
-              <i className="fa fa-pen" style={{ fontSize:11 }} />
-            </button>
-            <button title="Duplicar formulario" onClick={()=>openCopiar(r)}
-              style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#94A3B8', fontSize:12, display:'grid', placeItems:'center', transition:'all 80ms' }}
-              onMouseEnter={e=>{e.currentTarget.style.background='#fff';e.currentTarget.style.color='#EA580C';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,.08)'}}
-              onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#94A3B8';e.currentTarget.style.boxShadow='none'}}>
-              <i className="fa fa-clone" style={{ fontSize:11 }} />
-            </button>
-            {/* Visual divider before destructive action */}
-            <div style={{ width:1, height:16, background:'#E2E8F0', margin:'0 2px' }} />
-            <button title="Eliminar formulario" onClick={()=>openElim(r)}
-              style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#CBD5E1', fontSize:11, display:'grid', placeItems:'center', transition:'all 80ms' }}
-              onMouseEnter={e=>{e.currentTarget.style.background='#FEF2F2';e.currentTarget.style.color='#DC2626';e.currentTarget.style.boxShadow='0 1px 4px rgba(220,38,38,.1)'}}
-              onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#CBD5E1';e.currentTarget.style.boxShadow='none'}}>
-              <i className="fa fa-trash" style={{ fontSize:11 }} />
-            </button>
-          </div>
+          {puedeEditar && (
+            <div style={{ display:'flex', alignItems:'center', gap:1, padding:3, background:'#F1F5F9', borderRadius:9, border:'1px solid #E2E8F0' }}>
+              <button title="Editar metadatos" onClick={()=>openMod(r)}
+                style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#94A3B8', fontSize:12, display:'grid', placeItems:'center', transition:'all 80ms' }}
+                onMouseEnter={e=>{e.currentTarget.style.background='#fff';e.currentTarget.style.color='#16A34A';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,.08)'}}
+                onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#94A3B8';e.currentTarget.style.boxShadow='none'}}>
+                <i className="fa fa-pen" style={{ fontSize:11 }} />
+              </button>
+              <button title="Duplicar formulario" onClick={()=>openCopiar(r)}
+                style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#94A3B8', fontSize:12, display:'grid', placeItems:'center', transition:'all 80ms' }}
+                onMouseEnter={e=>{e.currentTarget.style.background='#fff';e.currentTarget.style.color='#EA580C';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,.08)'}}
+                onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#94A3B8';e.currentTarget.style.boxShadow='none'}}>
+                <i className="fa fa-clone" style={{ fontSize:11 }} />
+              </button>
+              {/* Visual divider before the estado-changing action */}
+              <div style={{ width:1, height:16, background:'#E2E8F0', margin:'0 2px' }} />
+              {r.estado === 'Obsoleto' ? (
+                <button title="Reactivar formulario" onClick={()=>handleReactivar(r)}
+                  style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#CBD5E1', fontSize:11, display:'grid', placeItems:'center', transition:'all 80ms' }}
+                  onMouseEnter={e=>{e.currentTarget.style.background='#F0FDF4';e.currentTarget.style.color='#16A34A';e.currentTarget.style.boxShadow='0 1px 4px rgba(22,163,74,.1)'}}
+                  onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#CBD5E1';e.currentTarget.style.boxShadow='none'}}>
+                  <i className="fa fa-undo" style={{ fontSize:11 }} />
+                </button>
+              ) : (
+                <button title="Marcar como obsoleto" onClick={()=>openObsoleto(r)}
+                  style={{ width:27, height:27, borderRadius:6, border:'none', background:'transparent', cursor:'pointer', color:'#CBD5E1', fontSize:11, display:'grid', placeItems:'center', transition:'all 80ms' }}
+                  onMouseEnter={e=>{e.currentTarget.style.background='#FEF2F2';e.currentTarget.style.color='#DC2626';e.currentTarget.style.boxShadow='0 1px 4px rgba(220,38,38,.1)'}}
+                  onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='#CBD5E1';e.currentTarget.style.boxShadow='none'}}>
+                  <i className="fa fa-archive" style={{ fontSize:11 }} />
+                </button>
+              )}
+            </div>
+          )}
           {/* Primary CTA */}
           <button onClick={()=>{ setFormulario(r); window.scrollTo({top:0,behavior:'smooth'}) }}
             style={{ padding:'5px 13px', borderRadius:7, border:'none', background:'var(--navy)', cursor:'pointer', color:'#fff', fontSize:11.5, fontWeight:600, transition:'all 100ms', whiteSpace:'nowrap', letterSpacing:'0.01em' }}
@@ -2385,13 +3123,13 @@ export function DetallesList() {
     },
   ]
 
-  const modalTitle = mode==='crear'?'Crear Detalle':mode==='modificar'?'Modificar Detalle':'Copiar Detalle'
+  const modalTitle = mode==='crear'?'Crear Formulario':mode==='modificar'?'Modificar Formulario':'Copiar Formulario'
 
   const statsItems = [
-    { label:'Total formularios', count:data.length,                                     color:'var(--navy)',  bg:'rgba(10,45,99,.07)',  icon:'fa-wpforms' },
-    { label:'Activos',           count:data.filter(d=>d.estado==='Activo').length,       color:'#16A34A',     bg:'#F0FDF4',              icon:'fa-check-circle' },
-    { label:'Inactivos',         count:data.filter(d=>d.estado==='Inactivo').length,     color:'#64748B',     bg:'#F1F5F9',              icon:'fa-pause-circle' },
-    { label:'Con campos',        count:data.filter(d=>countComps(d.jsonSchema)>0).length,color:'#2563EB',     bg:'#EFF6FF',              icon:'fa-list-alt' },
+    { label:'Total formularios', count:data.length,                                        color:'var(--navy)', bg:'rgba(10,45,99,.07)', icon:'fa-clipboard-list' },
+    { label:'Activos',           count:data.filter(d=>d.estado==='Activo').length,          color:'#16A34A',     bg:'#F0FDF4',            icon:'fa-check-circle' },
+    { label:'En creación',       count:data.filter(d=>d.estado==='En creación').length,     color:'#D97706',     bg:'#FEF3C7',            icon:'fa-pen' },
+    { label:'Obsoletos',         count:data.filter(d=>d.estado==='Obsoleto').length,        color:'#64748B',     bg:'#F1F5F9',            icon:'fa-archive' },
   ]
 
   return (
@@ -2413,21 +3151,34 @@ export function DetallesList() {
             ))}
           </div>
 
-          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
-            <div style={{ flex:1, position:'relative' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16, flexWrap:'wrap' }}>
+            <div style={{ flex:1, minWidth:220, position:'relative' }}>
               <i className="fa fa-search" style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--ink-4)', fontSize:13, pointerEvents:'none' }} />
               <input style={{ width:'100%', padding:'9px 12px 9px 36px', background:'#fff', border:'1.5px solid var(--hair-2)', borderRadius:'var(--r-md)', fontSize:13.5, color:'var(--ink)', fontFamily:'var(--f-sans)', outline:'none' }}
                 placeholder="Buscar por código o descripción…" value={busqueda} onChange={e=>setBusqueda(e.target.value)}
                 onFocus={e=>e.target.style.borderColor='var(--navy)'} onBlur={e=>e.target.style.borderColor='var(--hair-2)'} />
             </div>
-            <button className="btn btn-success" onClick={openCrear}><i className="fa fa-plus" /> Crear detalle</button>
-            <button className="btn btn-gray" title="Eliminar cambios guardados y restaurar schemas originales"
-              onClick={() => { if (confirm('¿Restaurar todos los schemas a sus valores originales? Se perderán los cambios guardados.')) { resetDetalles(); setData([...getDetalles()]) } }}>
-              <i className="fa fa-undo" /> Restaurar defaults
-            </button>
+            <select style={{ height:38, padding:'0 10px', border:'1.5px solid var(--hair-2)', borderRadius:'var(--r-md)', fontSize:13, fontFamily:'var(--f-sans)', color:'var(--ink)', outline:'none', cursor:'pointer', background:'#fff', minWidth:150 }}
+              value={estadoFiltro} onChange={e=>setEstadoFiltro(e.target.value)} aria-label="Filtrar por estado">
+              <option value="">Todos los estados</option>
+              <option value="Activo">Activo</option>
+              <option value="En creación">En creación</option>
+              <option value="Obsoleto">Obsoleto</option>
+            </select>
+            <select style={{ height:38, padding:'0 10px', border:'1.5px solid var(--hair-2)', borderRadius:'var(--r-md)', fontSize:13, fontFamily:'var(--f-sans)', color:'var(--ink)', outline:'none', cursor:'pointer', background:'#fff', minWidth:190 }}
+              value={estrategiaFiltro} onChange={e=>setEstrategiaFiltro(e.target.value)} aria-label="Filtrar por estrategia de firma">
+              <option value="">Todas las estrategias</option>
+              {_estrategiasFirmaCache.map(ef => <option key={ef.id} value={String(ef.id)}>{ef.codigo} — {ef.descripcion}</option>)}
+            </select>
+            {hayFiltros && (
+              <button onClick={limpiarFiltros} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ink-4)', fontSize:12, display:'flex', alignItems:'center', gap:4, whiteSpace:'nowrap' }}>
+                <i className="fa fa-times" /> Limpiar
+              </button>
+            )}
+            {puedeEditar && <button className="btn btn-success" onClick={openCrear} style={{ marginLeft:'auto' }}><i className="fa fa-plus" /> Crear formulario</button>}
           </div>
-          <Panel title={`Lista de detalles · ${filtered.length} registro${filtered.length!==1?'s':''}`}>
-            <DataTable<Detalle> columns={cols} data={filtered} />
+          <Panel title={`Lista de formularios · ${filtered.length} de ${data.length} registro${data.length!==1?'s':''}`}>
+            <DataTable<Detalle> columns={cols} data={filtered} loading={loading} />
           </Panel>
         </>
       )}
@@ -2456,28 +3207,30 @@ export function DetallesList() {
               </div>
               <div style={{ marginBottom:14 }}>
                 <label style={{ display:'block', fontSize:12.5, fontWeight:600, color:'var(--ink-2)', marginBottom:5 }}>Estado <span style={{ color:'var(--orange)' }}>*</span></label>
-                <div style={{ display:'flex', gap:10 }}>
-                  {(['Activo','Inactivo'] as const).map(s=>(
+                <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+                  {(['En creación','Activo','Obsoleto'] as const).map(s=>(
                     <label key={s} style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', padding:'8px 16px', borderRadius:'var(--r-sm)', border:`1.5px solid ${form.estado===s?'var(--navy)':'var(--hair-2)'}`, background:form.estado===s?'rgba(10,45,99,.06)':'#fff', fontSize:13, fontWeight:form.estado===s?600:400, color:form.estado===s?'var(--navy)':'var(--ink-3)', transition:'all 120ms' }}>
                       <input type="radio" name="estado" value={s} checked={form.estado===s} onChange={()=>set('estado',s)} style={{ accentColor:'var(--navy)' }} />{s}
                     </label>
                   ))}
+                </div>
+                <div style={{ fontSize:11.5, color:'var(--ink-4)', marginTop:6, lineHeight:1.5 }}>
+                  <strong>En creación</strong>: aún se está diseñando, no puede asignarse a recetas. <strong>Activo</strong>: listo para usarse en recetas nuevas. <strong>Obsoleto</strong>: retirado — no se ofrece para recetas nuevas, pero los batch records que ya lo usan no se ven afectados.
                 </div>
               </div>
               <div style={{ marginBottom:14 }}>
                 <label style={{ display:'block', fontSize:12.5, fontWeight:600, color:'var(--ink-2)', marginBottom:5 }}>
                   Estrategia de firma
                 </label>
-                <select style={{ ...INP }}
-                  value={form.idEstrategiaFirma ?? ''}
-                  onChange={e => setForm(f => ({ ...f, idEstrategiaFirma: e.target.value ? Number(e.target.value) : undefined }))}>
-                  <option value="">Sin estrategia</option>
-                  {mockEstrategiasFirma.filter(e => e.activo).map(ef => (
-                    <option key={ef.id} value={ef.id}>{ef.codigo} — {ef.descripcion}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  options={_estrategiasFirmaCache.filter(e => e.activo).map(ef => ({ value: ef.id, label: ef.codigo, sublabel: ef.descripcion }))}
+                  value={form.idEstrategiaFirma ?? null}
+                  onChange={v => setForm(f => ({ ...f, idEstrategiaFirma: v ? Number(v) : undefined }))}
+                  placeholder="Buscar estrategia de firma…"
+                  emptyOptionLabel="Sin estrategia"
+                />
                 {form.idEstrategiaFirma && (() => {
-                  const ef = mockEstrategiasFirma.find(e => e.id === form.idEstrategiaFirma)
+                  const ef = _estrategiasFirmaCache.find(e => e.id === form.idEstrategiaFirma)
                   if (!ef) return null
                   const activas = ef.firmas.filter(f => f.activo).sort((a, b) => a.orden - b.orden)
                   return (
@@ -2514,19 +3267,19 @@ export function DetallesList() {
         document.body,
       )}
 
-      {mode==='eliminar' && selected && createPortal(
+      {mode==='obsoleto' && selected && createPortal(
         <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(10,21,48,.45)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }} onClick={()=>setMode(null)}>
           <div style={{ background:'var(--paper)', borderRadius:'var(--r-xl)', boxShadow:'var(--sh-3)', width:'100%', maxWidth:400 }} onClick={e=>e.stopPropagation()}>
             <div style={{ padding:'20px 22px', display:'flex', flexDirection:'column', alignItems:'center', gap:12, textAlign:'center' }}>
-              <div style={{ width:52, height:52, borderRadius:'50%', background:'#fef2f2', display:'grid', placeItems:'center' }}><i className="fa fa-trash-alt" style={{ color:'#dc2626', fontSize:20 }} /></div>
+              <div style={{ width:52, height:52, borderRadius:'50%', background:'#f1f5f9', display:'grid', placeItems:'center' }}><i className="fa fa-archive" style={{ color:'#64748b', fontSize:20 }} /></div>
               <div>
-                <div style={{ fontSize:16, fontWeight:700, color:'var(--ink)', marginBottom:6 }}>¿Eliminar detalle?</div>
-                <div style={{ fontSize:13.5, color:'var(--ink-3)', lineHeight:1.5 }}>Vas a eliminar <strong style={{ color:'var(--ink)' }}>{selected.codigo}</strong> — {selected.descripcion}.<br />Esta acción no se puede deshacer.</div>
+                <div style={{ fontSize:16, fontWeight:700, color:'var(--ink)', marginBottom:6 }}>¿Marcar formulario como obsoleto?</div>
+                <div style={{ fontSize:13.5, color:'var(--ink-3)', lineHeight:1.5 }}><strong style={{ color:'var(--ink)' }}>{selected.codigo}</strong> — {selected.descripcion} dejará de poder asignarse a recetas nuevas.<br />Los batch records que ya lo usan no se ven afectados, y puedes reactivarlo cuando quieras.</div>
               </div>
             </div>
             <div style={{ padding:'0 22px 20px', display:'flex', gap:8, justifyContent:'center' }}>
               <button className="btn btn-gray" style={{ minWidth:100 }} onClick={()=>setMode(null)}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-danger" style={{ minWidth:100 }} onClick={handleElim}><i className="fa fa-trash-alt" /> Eliminar</button>
+              <button className="btn btn-danger" style={{ minWidth:100 }} onClick={handleObsoleto}><i className="fa fa-archive" /> Marcar obsoleto</button>
             </div>
           </div>
         </div>,

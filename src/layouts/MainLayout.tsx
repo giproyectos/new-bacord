@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronRight, User, LogOut, Menu } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
-import { useAuditStore } from '@/stores/auditStore'
-import { randomUUID } from '@/utils/uuid'
+import { useAudit } from '@/hooks/useAudit'
 
 // ── Types ──────────────────────────────────────────────────────────────────
-interface NavLeaf   { label: string; to: string; icon?: string }
+// `modulo` referencia una clave de @/constants/modulos. Un leaf sin `modulo` es exclusivo
+// de administrador (p. ej. Usuarios, Roles) y nunca se muestra a un usuario no-administrador,
+// sin importar los módulos de su Rol.
+interface NavLeaf   { label: string; to: string; icon?: string; modulo?: string }
 interface NavBranch { label: string; icon: string; key: string; children: NavLeaf[] }
 interface NavGroup  { label: string; icon: string; key: string; children: (NavLeaf | NavBranch)[] }
 type NavItem = NavGroup
@@ -21,84 +23,93 @@ function isPathActive(pathname: string, to: string): boolean {
   return pathname === to || pathname.startsWith(to + '/')
 }
 
-// ── Menu: Administrador ────────────────────────────────────────────────────
-const NAV_ADMIN: NavItem[] = [
+// ── Menú completo (superset) — se filtra por módulo según el Rol del usuario ──
+// Los grupos están numerados y ordenados siguiendo el orden real en que se configura y
+// opera el sistema (ver README): primero los catálogos base, luego firmas/formularios,
+// luego accesos, y por último el ciclo de producción propiamente dicho. Auditoría queda
+// aparte porque es una función de supervisión continua, no un paso de la secuencia.
+const NAV_ALL: NavItem[] = [
   {
-    label: 'Producción', icon: 'fa-industry', key: 'ModuloProduccion',
+    label: '1 · Catálogos base', icon: 'fa-building', key: 'ModuloCatalogos',
     children: [
-      { label: 'Batch Records',         icon: 'fa-clipboard-list', to: '/batch-records' },
+      { label: 'Centros',             icon: 'fa-building',  to: '/administracion/centros', modulo: 'centros' },
+      { label: 'Grupos Responsables', icon: 'fa-users',     to: '/administracion/grupos-responsables', modulo: 'grupos-responsables' },
+      {
+        label: 'Materiales', icon: 'fa-boxes', key: 'LinkMateriales',
+        children: [
+          { label: 'Importar Materiales', icon: 'fa-upload', to: '/administracion/materiales/cargar', modulo: 'materiales' },
+          { label: 'Ver Materiales',      icon: 'fa-table',  to: '/administracion/materiales', modulo: 'materiales' },
+        ],
+      },
+      { label: 'Procesos',            icon: 'fa-cogs',      to: '/administracion/procesos', modulo: 'procesos' },
+      // 'Parámetros' oculto de la navegación: catálogo huérfano, sin ninguna relación ni
+      // consumidor en el resto del sistema (investigado y confirmado) — no se eliminó el
+      // código/ruta/tabla por si en el futuro se necesita una tabla real de configuración.
+    ],
+  },
+  {
+    label: '2 · Firmas y Formularios', icon: 'fa-pen-nib', key: 'ModuloFirmas',
+    children: [
+      { label: 'Firmas',               icon: 'fa-pen-nib',   to: '/firmas', modulo: 'firmas' },
+      { label: 'Estrategias de Firma', icon: 'fa-sitemap',   to: '/estrategias-firma', modulo: 'estrategias-firma' },
+      { label: 'Formularios',          icon: 'fa-list-alt',  to: '/administracion/detalles', modulo: 'detalles' },
+    ],
+  },
+  {
+    label: '3 · Accesos', icon: 'fa-user-shield', key: 'ModuloAccesos',
+    children: [
+      { label: 'Roles',    icon: 'fa-user-shield', to: '/administracion/roles' },
+      { label: 'Usuarios', icon: 'fa-user',        to: '/administracion/usuarios' },
+    ],
+  },
+  {
+    label: '4 · Producción', icon: 'fa-industry', key: 'ModuloProduccion',
+    children: [
+      { label: 'Recetas Maestras',      icon: 'fa-book-medical',  to: '/recetas-maestras', modulo: 'recetas-maestras' },
       {
         label: 'Órdenes de Proceso', icon: 'fa-list-alt', key: 'LinkOrdenesProceso',
         children: [
-          { label: 'Importar Órdenes', icon: 'fa-upload',   to: '/ordenes-proceso/cargar' },
-          { label: 'Ver Órdenes',      icon: 'fa-table',    to: '/ordenes-proceso' },
+          { label: 'Importar Órdenes', icon: 'fa-upload',   to: '/ordenes-proceso/cargar', modulo: 'ordenes-proceso' },
+          { label: 'Ver Órdenes',      icon: 'fa-table',    to: '/ordenes-proceso', modulo: 'ordenes-proceso' },
         ],
       },
-      { label: 'Fórmulas de Control',   icon: 'fa-vials',          to: '/formulas-control' },
+      { label: 'Fórmulas de Control',   icon: 'fa-vials',          to: '/formulas-control', modulo: 'formulas-control' },
+      { label: 'Batch Records',         icon: 'fa-clipboard-list', to: '/batch-records', modulo: 'batch-records' },
     ],
   },
   {
-    label: 'Calidad', icon: 'fa-certificate', key: 'ModuloCalidad',
+    label: 'Auditoría', icon: 'fa-history', key: 'ModuloAuditoria',
     children: [
-      { label: 'Firmas',               icon: 'fa-pen-nib',          to: '/firmas' },
-      { label: 'Estrategias de Firma', icon: 'fa-sitemap',  to: '/estrategias-firma' },
-    ],
-  },
-  {
-    label: 'Configuración', icon: 'fa-sliders-h', key: 'ModuloConfiguracion',
-    children: [
-      { label: 'Recetas Maestras',      icon: 'fa-book-medical',  to: '/recetas-maestras' },
-      { label: 'Materiales',            icon: 'fa-boxes',         to: '/administracion/materiales' },
-      { label: 'Procesos',              icon: 'fa-cogs',          to: '/administracion/procesos' },
-      { label: 'Parámetros',            icon: 'fa-sliders-h',     to: '/administracion/parametros' },
-      { label: 'Centros',               icon: 'fa-building',      to: '/administracion/centros' },
-      { label: 'Grupos Responsables',   icon: 'fa-users',         to: '/administracion/grupos-responsables' },
-      { label: 'Formularios',           icon: 'fa-list-alt',      to: '/administracion/detalles' },
-    ],
-  },
-  {
-    label: 'Administración', icon: 'fa-shield-alt', key: 'ModuloAdministracion',
-    children: [
-      { label: 'Usuarios',  icon: 'fa-user',         to: '/administracion/usuarios' },
-      { label: 'Roles',     icon: 'fa-user-shield',  to: '/administracion/roles' },
-      {
-        label: 'Auditoría', icon: 'fa-file-alt', key: 'LinkAuditoria',
-        children: [
-          { label: 'Consulta Log',     icon: 'fa-search',      to: '/admin/logs' },
-          { label: 'Sesiones',         icon: 'fa-clock',       to: '/admin/sesiones' },
-          { label: 'Log de Ingresos',  icon: 'fa-sign-in-alt', to: '/admin/log-logueos' },
-        ],
-      },
+      { label: 'Consulta Log',     icon: 'fa-search',      to: '/admin/logs', modulo: 'auditoria' },
+      { label: 'Log de Ingresos',  icon: 'fa-sign-in-alt', to: '/admin/log-logueos', modulo: 'auditoria' },
     ],
   },
 ]
 
-// ── Menu: Calidad (QA) ─────────────────────────────────────────────────────
-const NAV_CALIDAD: NavItem[] = [
-  {
-    label: 'Producción', icon: 'fa-industry', key: 'ModuloProduccion',
-    children: [
-      { label: 'Batch Records', icon: 'fa-clipboard-list', to: '/batch-records' },
-    ],
-  },
-  {
-    label: 'Calidad', icon: 'fa-certificate', key: 'ModuloCalidad',
-    children: [
-      { label: 'Firmas',               icon: 'fa-pen-nib',         to: '/firmas' },
-      { label: 'Estrategias de Firma', icon: 'fa-sitemap', to: '/estrategias-firma' },
-    ],
-  },
-]
+// Todas las rutas de NAV_ALL etiquetadas con módulo, para guardar la ruta activa también
+// cuando el usuario navega directo por URL (no solo cuando usa el menú).
+const RUTA_MODULO: [string, string][] = NAV_ALL.flatMap((g) =>
+  g.children.flatMap((c) => (isLeaf(c) ? (c.modulo ? [[c.to, c.modulo] as [string, string]] : []) : c.children.flatMap((cc) => (cc.modulo ? [[cc.to, cc.modulo] as [string, string]] : []))))
+)
 
-// ── Menu: Operario / Producción ────────────────────────────────────────────
-const NAV_OPERARIO: NavItem[] = [
-  {
-    label: 'Producción', icon: 'fa-industry', key: 'ModuloProduccion',
-    children: [
-      { label: 'Batch Records', icon: 'fa-clipboard-list', to: '/batch-records' },
-    ],
-  },
-]
+function filtrarNav(isAdmin: boolean, modulos: string[]): NavItem[] {
+  if (isAdmin) return NAV_ALL
+  return NAV_ALL
+    .map((group) => {
+      const children = group.children
+        .map((child) => {
+          if (isLeaf(child)) {
+            if (!child.modulo || !modulos.includes(child.modulo)) return null
+            return child
+          }
+          const sub = child.children.filter((c) => c.modulo && modulos.includes(c.modulo))
+          return sub.length > 0 ? { ...child, children: sub } : null
+        })
+        .filter((c): c is NavLeaf | NavBranch => c !== null)
+      return { ...group, children }
+    })
+    .filter((g) => g.children.length > 0)
+}
 
 // ── Sub-item renderer ──────────────────────────────────────────────────────
 function SubItem({ item }: { item: NavLeaf | NavBranch }) {
@@ -207,20 +218,21 @@ export function MainLayout() {
   const logout   = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
   const location = useLocation()
+  const { registrar } = useAudit()
 
-  const grupos    = user?.grupos?.split(',').map(g => g.trim()) ?? []
-  const isAdmin   = !!user?.esAdministrador
-  const isCalidad = grupos.includes('Calidad')
-  const NAV       = isAdmin ? NAV_ADMIN : isCalidad ? NAV_CALIDAD : NAV_OPERARIO
+  const isAdmin = !!user?.esAdministrador
+  const modulos = user?.modulos ?? []
+  const NAV     = filtrarNav(isAdmin, modulos)
+
+  // Si el usuario navega directo por URL a un módulo que su Rol no incluye, lo regresa al inicio.
+  useEffect(() => {
+    if (isAdmin) return
+    const requerido = RUTA_MODULO.find(([to]) => isPathActive(location.pathname, to))?.[1]
+    if (requerido && !modulos.includes(requerido)) navigate('/', { replace: true })
+  }, [location.pathname, isAdmin, modulos, navigate])
 
   const handleLogout = () => {
-    useAuditStore.getState().add({
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      idUsuario: user?.idUsuario ?? 0,
-      nombreUsuario: user ? `${user.nombres} ${user.apellidos}` : 'Desconocido',
-      loginUsuario: user?.login ?? 'desconocido',
-      cargo: 'Usuario del sistema',
+    registrar({
       entidad: 'Sesion',
       idEntidad: user?.idUsuario ?? 0,
       descripcionEntidad: `Cierre de sesión — ${user?.login ?? ''}`,
@@ -246,11 +258,11 @@ export function MainLayout() {
     '/administracion/centros':         'Centros',
     '/administracion/grupos-responsables': 'Grupos Responsables',
     '/administracion/materiales':      'Materiales',
+    '/administracion/materiales/cargar': 'Importar Materiales',
     '/administracion/procesos':        'Procesos',
     '/administracion/parametros':      'Parámetros',
     '/administracion/detalles':        'Formularios',
     '/admin/logs':                     'Consulta de Modificaciones',
-    '/admin/sesiones':                 'Sesiones Activas',
     '/admin/log-logueos':              'Log de Ingresos',
   }
   const dynamicTitles: [RegExp, string][] = [

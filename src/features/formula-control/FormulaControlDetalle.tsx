@@ -3,9 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Panel } from '@/components/shared/Panel'
 import { formulaControlApi } from '@/api/formulaControl'
 import { ordenProcesoApi } from '@/api/ordenProceso'
-import { mockRecetas, mockBatchRecords } from '@/api/mock'
+import { recetaMaestraApi } from '@/api/recetaMaestra'
+import { batchRecordApi } from '@/api/batchRecord'
 import { Link } from 'react-router-dom'
-import type { FormulaControl, OrdenProceso, ComponenteOrden, RecetaMaestra } from '@/types'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import type { FormulaControl, OrdenProceso, ComponenteOrden, RecetaMaestra, BatchRecord } from '@/types'
 
 const ESTADO: Record<number, { label: string; bg: string; color: string }> = {
   1: { label: 'En Tratamiento', bg: '#FEF3C7', color: '#92400E' },
@@ -14,12 +16,14 @@ const ESTADO: Record<number, { label: string; bg: string; color: string }> = {
 }
 
 export function FormulaControlDetalle() {
+  const puedeEditar = usePuedeEditar('formulas-control')
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [fc, setFc] = useState<FormulaControl | null>(null)
   const [op, setOp] = useState<OrdenProceso | null>(null)
   const [receta, setReceta] = useState<RecetaMaestra | null>(null)
   const [componentes, setComponentes] = useState<ComponenteOrden[]>([])
+  const [br, setBr] = useState<BatchRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [accion, setAccion] = useState<'enviar' | 'cancelar' | null>(null)
   const [procesando, setProcesando] = useState(false)
@@ -28,13 +32,16 @@ export function FormulaControlDetalle() {
     if (!id) return
     formulaControlApi.find(Number(id)).then(async (fc) => {
       setFc(fc)
-      const [op, comps] = await Promise.all([
+      const [op, comps, receta, brs] = await Promise.all([
         ordenProcesoApi.find(fc.idOrdenProceso),
         ordenProcesoApi.getComponentes(fc.idOrdenProceso),
+        recetaMaestraApi.find(fc.idRecetaMaestra).catch(() => null),
+        batchRecordApi.buscar(),
       ])
       setOp(op)
       setComponentes(comps)
-      setReceta(mockRecetas.find(r => r.idRecetaMaestra === fc.idRecetaMaestra) ?? null)
+      setReceta(receta)
+      setBr(brs.find(b => b.idFormulaControl === fc.idFormulaControl) ?? null)
     }).finally(() => setLoading(false))
   }, [id])
 
@@ -89,7 +96,6 @@ export function FormulaControlDetalle() {
             <i className="fa fa-arrow-left" style={{ fontSize: 10 }} /> Volver
           </button>
           {(() => {
-            const br = mockBatchRecords.find(b => b.idFormulaControl === fc.idFormulaControl)
             return br ? (
               <Link to={`/batch-records/${br.idBatchRecord}/editar`}
                 style={{ background: 'rgba(247,201,46,0.18)', border: '1px solid rgba(247,201,46,0.35)',
@@ -112,7 +118,7 @@ export function FormulaControlDetalle() {
               Creada: {new Date(fc.fechaCreacion).toLocaleDateString('es-CO', { dateStyle: 'long' })}
             </div>
           </div>
-          {activa && (
+          {activa && puedeEditar && (
             <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
               <button onClick={() => setAccion('cancelar')}
                 style={{ background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.4)',
@@ -264,8 +270,8 @@ export function FormulaControlDetalle() {
               {accion === 'enviar' ? (
                 <>
                   Se creará un <strong>Batch Record</strong> vinculado a la FC-{fc.idFormulaControl}.
-                  Los datos de la Orden de Proceso y los componentes se pre-llenarán automáticamente en
-                  los formularios <strong>ET1-F1</strong> (Encabezado) y <strong>ET1-F2</strong> (Pesaje).
+                  Los datos de la Orden de Proceso y sus componentes quedarán disponibles para pre-llenar
+                  los campos de los formularios que el administrador haya configurado con mapeo automático.
                 </>
               ) : (
                 <>¿Está seguro de cancelar la FC-{fc.idFormulaControl}? Esta acción no se puede deshacer.</>

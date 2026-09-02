@@ -7,3 +7,5 @@ __pycache__/
 Thumbs.db
 *.local
 .env
+*.tsbuildinfo
+*.log

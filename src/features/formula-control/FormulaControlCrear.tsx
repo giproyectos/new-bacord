@@ -1,21 +1,26 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formulaControlApi } from '@/api/formulaControl'
-import { mockOrdenes, mockFormulasControl } from '@/api/mock'
+import { ordenProcesoApi } from '@/api/ordenProceso'
 import { Panel } from '@/components/shared/Panel'
+import { usePuedeEditar } from '@/hooks/usePermisos'
 
 const ESTADO_OP: Record<number, string> = { 1: 'Disponible', 2: 'En FC', 3: 'En Producción' }
 
 export function FormulaControlCrear() {
+  const puedeEditar = usePuedeEditar('formulas-control')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [idOrden, setIdOrden] = useState('')
   const [error, setError] = useState('')
 
+  const { data: ordenes = [] } = useQuery({ queryKey: ['ordenes-proceso'], queryFn: () => ordenProcesoApi.buscar() })
+  const { data: formulas = [] } = useQuery({ queryKey: ['formulas-control'], queryFn: formulaControlApi.buscar })
+
   // Only show OPs without an active FC
-  const opesDisponibles = mockOrdenes.filter(op => {
-    const tieneFC = mockFormulasControl.some(
+  const opesDisponibles = ordenes.filter(op => {
+    const tieneFC = formulas.some(
       fc => fc.idOrdenProceso === op.idOrdenProceso && fc.idEstado !== 3
     )
     return !tieneFC
@@ -37,7 +42,7 @@ export function FormulaControlCrear() {
     mutation.mutate(Number(idOrden))
   }
 
-  const selected = mockOrdenes.find(o => o.idOrdenProceso === Number(idOrden))
+  const selected = ordenes.find(o => o.idOrdenProceso === Number(idOrden))
 
   return (
     <Panel title="Nueva Fórmula de Control">
@@ -98,7 +103,7 @@ export function FormulaControlCrear() {
           <button type="button" className="btn btn-gray" onClick={() => navigate('/formulas-control')}>
             <i className="fa fa-undo" /> Cancelar
           </button>
-          <button type="submit" className="btn btn-primary" disabled={!idOrden || mutation.isPending}>
+          <button type="submit" className="btn btn-primary" disabled={!idOrden || mutation.isPending || !puedeEditar}>
             {mutation.isPending ? <><i className="fa fa-spinner fa-spin" /> Creando...</> : <><i className="fa fa-plus" /> Crear Fórmula de Control</>}
           </button>
         </div>

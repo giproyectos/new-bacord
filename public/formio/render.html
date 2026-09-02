@@ -10,6 +10,26 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/formiojs@4.14.13/dist/formio.full.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
   <style>
+    /* ── Theme tokens ──
+       Single source of truth for "what a form field surface looks like". Every input-like
+       surface (.form-control, Choices.js selects, the date/time picker input and its toggle
+       button) reads these instead of hardcoding its own colors, so they can never drift apart
+       again — a new field type just has to consume these variables to automatically match. */
+    :root {
+      --bacord-field-bg: #fff;
+      --bacord-field-border-color: #CBD5E1;
+      --bacord-field-border-width: 1.5px;
+      --bacord-field-radius: 8px;
+      --bacord-field-padding: 9px 12px;
+      --bacord-field-font-size: 13.5px;
+      --bacord-field-color: #111827;
+      --bacord-field-placeholder: #94A3B8;
+      --bacord-focus-border: #0A2D63;
+      --bacord-focus-ring: 0 0 0 3px rgba(10,45,99,0.09);
+      --bacord-addon-bg: #F6F4EE;
+      --bacord-addon-color: #5B6478;
+      --bacord-addon-border-color: rgba(10,21,48,0.16);
+    }
     /* ── Reset ── */
     *, *::before, *::after { box-sizing: border-box; }
 
@@ -61,21 +81,33 @@
       display: block !important;
       width: 100% !important;
       font-family: 'Geist', sans-serif !important;
-      border: 1.5px solid #CBD5E1 !important;
-      border-radius: 8px !important;
-      padding: 9px 12px !important;
-      font-size: 13.5px !important;
-      color: #111827 !important;
-      background: #fff !important;
+      border: var(--bacord-field-border-width) solid var(--bacord-field-border-color) !important;
+      border-radius: var(--bacord-field-radius) !important;
+      padding: var(--bacord-field-padding) !important;
+      font-size: var(--bacord-field-font-size) !important;
+      color: var(--bacord-field-color) !important;
+      background: var(--bacord-field-bg) !important;
       transition: border-color 120ms, box-shadow 120ms !important;
       box-shadow: none !important;
       height: auto !important;
     }
     .form-control:focus {
-      border-color: #0A2D63 !important;
-      box-shadow: 0 0 0 3px rgba(10,45,99,0.09) !important;
+      border-color: var(--bacord-focus-border) !important;
+      box-shadow: var(--bacord-focus-ring) !important;
       outline: none !important;
     }
+    /* Any field disabled at runtime (the manual per-field "Deshabilitado" toggle, or the
+       survey "bloqueo por respuesta" locking the rest of the form) — otherwise these fall
+       back to the browser's native disabled-input look, which doesn't match our theme. */
+    .form-control:disabled,
+    .form-control[disabled],
+    .choices__inner.is-disabled {
+      background: #F8FAFC !important;
+      border-color: #E2E8F0 !important;
+      color: #94A3B8 !important;
+      cursor: not-allowed !important;
+    }
+    input:disabled, select:disabled, textarea:disabled { cursor: not-allowed !important; }
 
     /* ── OP-locked fields (pre-filled from process order, not editable) ── */
     .op-locked .form-control,
@@ -101,7 +133,7 @@
       color: #93C5FD;
       vertical-align: middle;
     }
-    .form-control::placeholder { color: #94A3B8 !important; font-size: 13px !important; }
+    .form-control::placeholder { color: var(--bacord-field-placeholder) !important; font-size: 13px !important; }
 
     textarea.form-control { resize: vertical; min-height: 80px; }
     select.form-control { cursor: pointer; appearance: auto; }
@@ -174,8 +206,17 @@
     .btn-info      { background: #0284C7 !important; color: #fff !important; }
     .btn-default   { background: #EFECE2 !important; color: #2A3349 !important; border: 1.5px solid rgba(10,21,48,0.14) !important; }
 
-    /* ── Checkboxes & Radios ── */
-    .form-check { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+    /* ── Checkboxes & Radios ──
+       Both render as the same "card" surface (border, radius, padding, checked-highlight) so
+       a Radio field and a Checkbox field feel like the same family of control instead of one
+       being a bare unstyled input and the other a bordered card. The checked/selected highlight
+       is driven by JS toggling .bacord-checked (see applyCheckedCardState) rather than the CSS
+       :has() selector alone, since :has() support can't be assumed on every deployment target —
+       the :has() rule is kept too as a harmless progressive enhancement where it is supported. */
+    .form-check {
+      display: flex !important; align-items: center !important; gap: 9px !important;
+      margin-bottom: 6px !important;
+    }
     .form-check-input, input[type="checkbox"], input[type="radio"] {
       accent-color: #0A2D63 !important;
       width: 15px !important; height: 15px !important;
@@ -185,18 +226,37 @@
       font-size: 13.5px !important; color: #111827 !important;
       font-weight: 400 !important; cursor: pointer !important; margin-bottom: 0 !important;
     }
-    /* Radio option as a card */
-    .formio-component-radio .form-check {
-      padding: 8px 13px; border-radius: 8px;
-      border: 1.5px solid #E2E8F0; background: #fff;
-      transition: border-color 100ms, background 100ms;
+    .formio-component-radio .form-check,
+    .formio-component-checkbox .form-check {
+      padding: 8px 13px !important; border-radius: 8px !important;
+      border: 1.5px solid #E2E8F0 !important; background: #fff !important;
+      transition: border-color 100ms, background 100ms !important;
     }
-    .formio-component-radio .form-check:has(input:checked) {
-      border-color: #0A2D63; background: rgba(10,45,99,0.04);
+    .formio-component-radio .form-check:has(input:checked),
+    .formio-component-radio .form-check.bacord-checked,
+    .formio-component-checkbox .form-check:has(input:checked),
+    .formio-component-checkbox .form-check.bacord-checked {
+      border-color: #0A2D63 !important; background: rgba(10,45,99,0.04) !important;
     }
-    /* Inline radio: horizontal */
-    .formio-component-radio.radio-inline .form-check {
-      display: inline-flex; margin-right: 8px; margin-bottom: 6px;
+    /* Inline radio: horizontal — driven by the .bacord-radio-inline class applied via JS
+       (see applyRadioInlineLayout). We make the field root itself the flex container and
+       "unwrap" (display:contents) any generic wrapper div form.io puts around the option
+       rows, so this works regardless of exactly which wrapper class form.io emits — only
+       the field's own label/help/error elements are excluded from being unwrapped. */
+    .bacord-radio-inline {
+      display: flex !important; flex-wrap: wrap !important; align-items: flex-start !important; gap: 8px !important;
+    }
+    .bacord-radio-inline > *:not(.form-check):not(label):not(.col-form-label):not(.control-label):not(.help-block):not(.formio-errors):not(.formio-error-wrapper) {
+      display: contents !important;
+    }
+    /* Keep the field's own label on its own full-width line, above the wrapping options */
+    .bacord-radio-inline > label,
+    .bacord-radio-inline > .col-form-label,
+    .bacord-radio-inline > .control-label {
+      flex: 1 0 100% !important;
+    }
+    .bacord-radio-inline .form-check {
+      display: inline-flex !important; margin-right: 0 !important; margin-bottom: 0 !important;
     }
 
     /* ── Input groups ── */
@@ -206,36 +266,72 @@
       align-items: stretch !important;
       width: 100% !important;
     }
-    .input-group > .form-control {
-      flex: 1 1 auto !important;
-      width: 1% !important;
-      min-width: 0 !important;
-      position: relative !important;
-      z-index: 1 !important;
+
+    /* ── Date/time picker (flatpickr) ──
+       Confirmed from the actual rendered markup (not guessed): form.io puts TWO <input>
+       elements inside .input-group — a hidden one flatpickr manages internally
+       (type="hidden", carries .flatpickr-input — easy to mistake for "the real input", which
+       is exactly what broke this twice before) and the real VISIBLE one right after it
+       (type="text", no special class at all). The toggle is a <span class="input-group-text">
+       inside <div class="input-group-append"> — no [data-toggle]/[data-input] attributes are
+       used by this form.io version, so those aren't targeted anymore either. Everything here
+       is scoped to .formio-component-datetime/-time and consumes the same theme tokens as
+       .form-control, so it can't visually drift from a plain text/number input again. */
+    .formio-component-datetime .input-group > input[type="hidden"],
+    .formio-component-time .input-group > input[type="hidden"] {
+      display: none !important;
     }
-    .input-group-prepend,
-    .input-group-append {
-      display: flex !important;
-      align-items: center !important;
-    }
-    .input-group-text, .input-group-addon {
+    .formio-component-datetime .input-group > input:not([type="hidden"]),
+    .formio-component-time .input-group > input:not([type="hidden"]) {
+      display: block !important;
+      width: 100% !important;
       font-family: 'Geist', sans-serif !important;
-      background: #F6F4EE !important;
-      border: 1.5px solid rgba(10,21,48,0.16) !important;
-      color: #5B6478 !important;
-      font-size: 13.5px !important;
-      padding: 8px 12px !important;
+      border: var(--bacord-field-border-width) solid var(--bacord-field-border-color) !important;
+      border-radius: var(--bacord-field-radius) !important;
+      padding: var(--bacord-field-padding) !important;
+      font-size: var(--bacord-field-font-size) !important;
+      color: var(--bacord-field-color) !important;
+      background: var(--bacord-field-bg) !important;
+      box-shadow: none !important;
+      height: auto !important;
+      flex: 1 1 auto !important;
+      min-width: 0 !important;
+      border-top-right-radius: 0 !important;
+      border-bottom-right-radius: 0 !important;
+    }
+    .formio-component-datetime .input-group > input:not([type="hidden"]):focus,
+    .formio-component-time .input-group > input:not([type="hidden"]):focus {
+      border-color: var(--bacord-focus-border) !important;
+      box-shadow: var(--bacord-focus-ring) !important;
+      outline: none !important;
+    }
+    .formio-component-datetime .input-group-append,
+    .formio-component-time .input-group-append {
+      display: flex !important;
+      align-items: stretch !important;
+      flex: 0 0 auto !important;
+    }
+    .formio-component-datetime .input-group-append .input-group-text,
+    .formio-component-time .input-group-append .input-group-text {
       display: flex !important;
       align-items: center !important;
+      justify-content: center !important;
+      box-sizing: border-box !important;
+      height: auto !important;
+      align-self: stretch !important;
+      margin: 0 !important;
+      padding: 0 12px !important;
+      font-family: 'Geist', sans-serif !important;
+      font-size: var(--bacord-field-font-size) !important;
+      background: var(--bacord-addon-bg) !important;
+      color: var(--bacord-addon-color) !important;
+      border: var(--bacord-field-border-width) solid var(--bacord-field-border-color) !important;
+      border-left: none !important;
+      border-radius: 0 var(--bacord-field-radius) var(--bacord-field-radius) 0 !important;
+      box-shadow: none !important;
       white-space: nowrap !important;
+      cursor: pointer !important;
     }
-    .input-group .form-control { border-radius: 8px 0 0 8px !important; }
-    .input-group .input-group-text:first-child,
-    .input-group .input-group-addon:first-child { border-radius: 8px 0 0 8px !important; }
-    .input-group-append .btn,
-    .input-group-append .input-group-text { border-radius: 0 8px 8px 0 !important; }
-    .input-group-prepend .btn,
-    .input-group-prepend .input-group-text { border-radius: 8px 0 0 8px !important; }
 
     /* ── Panel / Card ── */
     .card, .panel, .panel-default {
@@ -299,6 +395,18 @@
       display: block !important; margin: 0 auto !important;
       accent-color: #0A2D63 !important; width: 16px !important; height: 16px !important;
     }
+    /* Survey row locked by the "bloqueo por respuesta" rule (see setupSurveyLocks) */
+    .bacord-survey-row-locked td { background: #F1F5F9 !important; }
+    .bacord-survey-row-locked td:first-child::after {
+      content: '\f023'; font-family: 'FontAwesome'; font-size: 10px; color: #94A3B8;
+      margin-left: 6px; vertical-align: middle;
+    }
+    /* Whole survey locked (lockScope 'encuesta') — every row goes to the locked look */
+    .bacord-survey-locked tbody td { background: #F1F5F9 !important; }
+    .bacord-survey-locked thead th:first-child::after {
+      content: '\f023'; font-family: 'FontAwesome'; font-size: 10px; color: #94A3B8;
+      margin-left: 6px; vertical-align: middle;
+    }
 
     /* ── DataGrid ── */
     .dg-scroll-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
@@ -308,6 +416,19 @@
     .datagrid-col-resizing { cursor: col-resize !important; user-select: none !important; }
     .datagrid-col-resizing * { user-select: none !important; }
     .btn-sm { padding: 4px 12px !important; font-size: 12px !important; border-radius: 6px !important; }
+    /* Fields inside a table row (datagrid / survey cells) use the same visual language as a
+       standalone field but at table density — otherwise every full-size input/select stacked
+       into a narrow column looks bulky and mismatched next to the table's own compact padding. */
+    .table td .formio-component,
+    .datagrid-table td .formio-component { margin-bottom: 0 !important; }
+    .table td .form-control,
+    .datagrid-table td .form-control {
+      padding: 5px 8px !important; font-size: 13px !important; border-radius: 6px !important;
+    }
+    .table td .input-group-text,
+    .datagrid-table td .input-group-text { padding: 0 8px !important; }
+    .table td label, .table td .col-form-label,
+    .datagrid-table td label, .datagrid-table td .col-form-label { display: none !important; }
 
     /* ── Disabled textfield display (replaces <input> so long text wraps) ── */
     .dtext {
@@ -368,16 +489,6 @@
       font-size: 11px !important; color: #8A8F9F !important; font-weight: 500 !important;
     }
 
-    /* ── DateTime (flatpickr + input-group) ── */
-    .formio-component-datetime .input-group-append .btn {
-      border-radius: 0 8px 8px 0 !important;
-      border: 1.5px solid rgba(10,21,48,0.16) !important; border-left: none !important;
-      background: #F6F4EE !important; color: #5B6478 !important;
-      padding: 0 10px !important;
-    }
-    .formio-component-datetime .flatpickr-input {
-      border-radius: 8px 0 0 8px !important; border: 1.5px solid rgba(10,21,48,0.16) !important;
-    }
 
     /* ── Content HTML components ── */
     .formio-component-content { line-height: 1.65; margin-bottom: 6px !important; }
@@ -446,31 +557,64 @@
       margin: 0 !important;
       gap: 16px !important;
     }
-    /* Both cases: column divs get equal flex width */
+    /* Both cases: column divs share the row's width proportionally to their configured
+       width (form.io emits a Bootstrap-style col-sm-N class per column, N 1-12) — flex-grow
+       set to N directly reproduces that proportion without any percentage math. This used to
+       be a flat `flex: 1 !important` that forced every column to equal width regardless of N,
+       which is what made per-column width configuration in the builder have no visual effect. */
     .formio-component-columns > .row > [class*="col-"],
     .formio-component-columns > [class*="col-"] {
-      flex: 1 !important;
+      flex-grow: 1 !important;
+      flex-shrink: 1 !important;
+      flex-basis: 0 !important;
       padding: 0 !important;
       max-width: none !important;
       min-width: 0 !important;
       width: auto !important;
     }
+    .formio-component-columns [class~="col-sm-1"]  { flex-grow: 1 !important; }
+    .formio-component-columns [class~="col-sm-2"]  { flex-grow: 2 !important; }
+    .formio-component-columns [class~="col-sm-3"]  { flex-grow: 3 !important; }
+    .formio-component-columns [class~="col-sm-4"]  { flex-grow: 4 !important; }
+    .formio-component-columns [class~="col-sm-5"]  { flex-grow: 5 !important; }
+    .formio-component-columns [class~="col-sm-6"]  { flex-grow: 6 !important; }
+    .formio-component-columns [class~="col-sm-7"]  { flex-grow: 7 !important; }
+    .formio-component-columns [class~="col-sm-8"]  { flex-grow: 8 !important; }
+    .formio-component-columns [class~="col-sm-9"]  { flex-grow: 9 !important; }
+    .formio-component-columns [class~="col-sm-10"] { flex-grow: 10 !important; }
+    .formio-component-columns [class~="col-sm-11"] { flex-grow: 11 !important; }
+    .formio-component-columns [class~="col-sm-12"] { flex-grow: 12 !important; }
 
     /* ── Choices.js (select) ── */
+    /* Padding matches .form-control exactly (9px 12px) so a Select field sits at the same
+       height as a Textfield/Number field beside it — a 2px mismatch here was making rows
+       with mixed field types visibly misaligned. */
     .choices__inner {
       font-family: 'Geist', sans-serif !important;
-      border: 1.5px solid #CBD5E1 !important;
-      border-radius: 8px !important;
-      padding: 7px 10px !important;
-      font-size: 13.5px !important;
-      background: #fff !important;
+      border: var(--bacord-field-border-width) solid var(--bacord-field-border-color) !important;
+      border-radius: var(--bacord-field-radius) !important;
+      padding: var(--bacord-field-padding) !important;
+      font-size: var(--bacord-field-font-size) !important;
+      color: var(--bacord-field-color) !important;
+      background: var(--bacord-field-bg) !important;
       min-height: auto !important;
+      box-shadow: none !important;
+      transition: border-color 120ms, box-shadow 120ms !important;
     }
-    .choices__inner:focus-within { border-color: #0A2D63 !important; box-shadow: 0 0 0 3px rgba(10,45,99,0.09) !important; }
-    .choices__input { font-family: 'Geist', sans-serif !important; font-size: 13px !important; background: transparent !important; }
-    .choices__list--dropdown { border-radius: 8px !important; border: 1.5px solid #CBD5E1 !important; box-shadow: 0 8px 24px rgba(10,21,48,0.12) !important; margin-top: 4px !important; overflow: hidden; z-index: 9999 !important; position: absolute !important; }
-    .choices__list--dropdown .choices__item--selectable { font-size: 13.5px !important; color: #2A3349 !important; padding: 9px 12px !important; }
-    .choices__list--dropdown .choices__item--selectable.is-highlighted { background: #EEF2FF !important; color: #0A2D63 !important; }
+    .choices__inner:focus-within { border-color: var(--bacord-focus-border) !important; box-shadow: var(--bacord-focus-ring) !important; }
+    .choices__input { font-family: 'Geist', sans-serif !important; font-size: var(--bacord-field-font-size) !important; background: transparent !important; }
+    .choices__list--single .choices__item,
+    .choices__list--multiple .choices__item {
+      font-family: 'Geist', sans-serif !important; font-size: var(--bacord-field-font-size) !important; color: var(--bacord-field-color) !important;
+    }
+    .choices__placeholder { color: var(--bacord-field-placeholder) !important; opacity: 1 !important; }
+    .choices__list--multiple .choices__item {
+      background: #EFF6FF !important; border: 1px solid #BFDBFE !important; color: #1D4ED8 !important;
+      border-radius: 6px !important; font-size: 12.5px !important; padding: 2px 8px !important;
+    }
+    .choices__list--dropdown { border-radius: var(--bacord-field-radius) !important; border: var(--bacord-field-border-width) solid var(--bacord-field-border-color) !important; box-shadow: 0 8px 24px rgba(10,21,48,0.12) !important; margin-top: 4px !important; overflow: hidden; z-index: 9999 !important; position: absolute !important; }
+    .choices__list--dropdown .choices__item--selectable { font-size: var(--bacord-field-font-size) !important; color: #2A3349 !important; padding: 9px 12px !important; }
+    .choices__list--dropdown .choices__item--selectable.is-highlighted { background: #EEF2FF !important; color: var(--bacord-focus-border) !important; }
 
     /* ── Flatpickr (datetime) ── */
     .flatpickr-input { font-family: 'Geist', sans-serif !important; }
@@ -480,6 +624,32 @@
 
     /* ── Alert / validation errors ── */
     .alert-danger { background: #FEF2F2 !important; border: 1.5px solid #FECACA !important; border-radius: 8px !important; color: #DC2626 !important; font-size: 13px !important; padding: 10px 14px !important; }
+
+    /* ── File upload (PDF field) ── */
+    .formio-component-file .fileSelector {
+      border: 1.5px dashed var(--bacord-field-border-color) !important;
+      border-radius: var(--bacord-field-radius) !important;
+      padding: 16px !important;
+      text-align: center !important;
+      background: #FAFBFC !important;
+      cursor: pointer !important;
+    }
+    .formio-component-file .fileSelector:hover { border-color: #94A3B8 !important; }
+    .formio-component-file ul.list-group { list-style: none !important; padding: 0 !important; margin: 8px 0 0 !important; }
+    .formio-component-file .list-group-item {
+      border: 1.5px solid var(--bacord-field-border-color) !important;
+      border-radius: 6px !important;
+      padding: 8px 12px !important;
+      margin-bottom: 6px !important;
+      display: flex !important; align-items: center !important; gap: 8px !important;
+    }
+    /* Inline PDF viewer injected after upload — see renderPdfPreviews */
+    .bacord-pdf-preview-wrap { margin-top: 10px; }
+    .bacord-pdf-frame {
+      display: block; width: 100%; height: 480px;
+      border: var(--bacord-field-border-width) solid var(--bacord-field-border-color);
+      border-radius: var(--bacord-field-radius);
+    }
   </style>
 </head>
 <body>
@@ -491,12 +661,15 @@
     window.onload = function () {
       var currentForm = null;
       var currentSchema = null;
+      var currentLanguage = 'en';
 
       function patch24hSchema(node) {
         if (!node) return;
         if (node.type === 'datetime' || node.type === 'time') {
           if (!node.widget) node.widget = {};
-          node.widget.time_24hr = true;
+          // Only default to 24h when the schema doesn't already declare a preference —
+          // the form builder now sets this explicitly per the chosen time format (12h/24h).
+          if (node.widget.time_24hr === undefined) node.widget.time_24hr = true;
         }
         (node.components || []).forEach(patch24hSchema);
         (node.columns || []).forEach(function(col) { (col.components || []).forEach(patch24hSchema); });
@@ -573,6 +746,183 @@
             });
           }
         });
+      }
+
+      // Radio components with `inline:true` need the .bacord-radio-inline class applied to
+      // their root element — driven from our own schema flag rather than guessing which CSS
+      // class form.io's own template emits for `inline` (see the .bacord-radio-inline rules).
+      function applyRadioInlineLayout(form) {
+        try {
+          form.everyComponent(function(comp) {
+            if (comp.component && comp.component.type === 'radio' && comp.element) {
+              comp.element.classList.toggle('bacord-radio-inline', !!comp.component.inline);
+            }
+          });
+        } catch(e) {}
+      }
+
+      // Radio/checkbox "cards" (.formio-component-radio/.formio-component-checkbox .form-check)
+      // highlight when selected — driven by JS instead of relying only on the CSS :has()
+      // selector, which isn't safe to assume is supported everywhere this gets deployed.
+      function applyCheckedCardState(root) {
+        var scope = root || document;
+        var checks = scope.querySelectorAll('.formio-component-radio .form-check, .formio-component-checkbox .form-check');
+        Array.prototype.forEach.call(checks, function(row) {
+          var input = row.querySelector('input[type="radio"], input[type="checkbox"]');
+          row.classList.toggle('bacord-checked', !!(input && input.checked));
+        });
+      }
+
+      // Survey's question column has no built-in way in form.io to set its header label —
+      // this is a custom `questionHeader` property (see compToJson in the form builder) that
+      // we apply ourselves onto the table's first <th>. IMPORTANT: this must never reassign
+      // textContent unconditionally — this function used to run from the MutationObserver
+      // below, and reassigning .textContent (even to the same string) is itself a childList
+      // mutation, which re-fired the observer, which called this again... an infinite loop
+      // that froze the whole page. The guard below and no longer calling this from the
+      // observer are both needed; keeping both since either alone would still be fragile.
+      function applySurveyQuestionHeader(form) {
+        try {
+          form.everyComponent(function(comp) {
+            if (!comp.component || comp.component.type !== 'survey' || !comp.element) return;
+            var th = comp.element.querySelector('table thead th');
+            if (!th) return;
+            var wanted = comp.component.questionHeader || 'Pregunta';
+            if (th.textContent !== wanted) th.textContent = wanted;
+          });
+        } catch(e) {}
+      }
+
+      // Survey "lock on answer" (custom lockOnValue/lockScope properties, not native to
+      // form.io): when the configured answer is chosen in any row, either that row's other
+      // options get disabled (lockScope 'linea') or every radio in the whole survey does
+      // (lockScope 'encuesta') — the rest of the form outside the survey is never touched.
+      // Driven by a native DOM 'change' listener on the survey's own radio inputs rather than
+      // form.io's component-level change event, since Survey manages its whole answer map as
+      // one component and doesn't cleanly expose "which row changed". Locking is done by
+      // disabling raw DOM inputs directly — NOT form.io component.disabled (that goes through
+      // a redraw, a childList mutation; this used to run from the MutationObserver too, so
+      // that redraw re-fired the observer, which locked again, which redrew again — an
+      // infinite loop that froze the page). Also applies at most once per survey (element-level
+      // flag), so it can never be reprocessed even if something else calls this again later.
+      function checkSurveyLock(form, comp) {
+        if (!comp.component || comp.component.type !== 'survey' || !comp.component.lockOnValue || !comp.element) return;
+        if (comp.element._bacordLockApplied) return;
+        var lockValue = comp.component.lockOnValue;
+        var checked = comp.element.querySelectorAll('input[type="radio"]:checked');
+        var anyMatch = false;
+        Array.prototype.forEach.call(checked, function(input) { if (input.value === lockValue) anyMatch = true; });
+        if (!anyMatch) return;
+        var scope = comp.component.lockScope || 'linea';
+        if (scope === 'encuesta') {
+          comp.element._bacordLockApplied = true;
+          Array.prototype.forEach.call(comp.element.querySelectorAll('input[type="radio"]'), function(r) {
+            r.disabled = true;
+          });
+          var table = comp.element.querySelector('table');
+          if (table) table.classList.add('bacord-survey-locked');
+        } else {
+          Array.prototype.forEach.call(checked, function(input) {
+            if (input.value !== lockValue) return;
+            var row = input.closest('tr');
+            if (!row || row.classList.contains('bacord-survey-row-locked')) return;
+            Array.prototype.forEach.call(row.querySelectorAll('input[type="radio"]'), function(r) {
+              if (r !== input) r.disabled = true;
+            });
+            row.classList.add('bacord-survey-row-locked');
+          });
+        }
+      }
+      function setupSurveyLocks(form, root) {
+        var scope = root || document;
+        try {
+          form.everyComponent(function(comp) {
+            if (!comp.component || comp.component.type !== 'survey' || !comp.component.lockOnValue || !comp.element) return;
+            if (!scope.contains(comp.element)) return;
+            checkSurveyLock(form, comp);
+            if (comp.element._bacordLockWired) return;
+            comp.element._bacordLockWired = true;
+            comp.element.addEventListener('change', function() { checkSurveyLock(form, comp); });
+          });
+        } catch(e) {}
+      }
+
+      // Data Grid "disable adding/removing rows" is a native form.io schema property
+      // (disableAddingRemovingRows), but as a defensive backstop we also hide the button
+      // directly in case a given form.io version doesn't fully honor it.
+      function applyDataGridAddRowToggle(form) {
+        try {
+          form.everyComponent(function(comp) {
+            if (!comp.component || comp.component.type !== 'datagrid' || !comp.element) return;
+            if (!comp.component.disableAddingRemovingRows) return;
+            var btn = comp.element.querySelector('.formio-button-add-row');
+            if (btn) btn.style.display = 'none';
+          });
+        } catch(e) {}
+      }
+
+      // Renders uploaded PDFs inline (the "PDF" field type, storage: 'base64') instead of just
+      // leaving form.io's default file-list entry with a download link — the field's actual
+      // value (comp.dataValue) is an array of {name, url, type} objects, where `url` is a
+      // data: URI for base64 storage, which an <iframe> can render directly with no extra
+      // library. Guarded by a signature check so it only touches the DOM when the file list
+      // actually changed — this is called from 'change' events, never from the
+      // MutationObserver, so that guard is a safety net rather than the only thing preventing
+      // a loop (see the header/lock bugs above for what happens when that's not true).
+      function renderPdfPreviews(form) {
+        try {
+          form.everyComponent(function(comp) {
+            if (!comp.component || comp.component.type !== 'file' || !comp.element) return;
+            var files = comp.dataValue;
+            var pdfs = Array.isArray(files)
+              ? files.filter(function(f) { return f && f.url && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')); })
+              : [];
+            var sig = pdfs.map(function(f) { return f.url; }).join('|');
+            var wrap = comp.element.querySelector('.bacord-pdf-preview-wrap');
+            if (!wrap) {
+              if (!pdfs.length) return;
+              wrap = document.createElement('div');
+              wrap.className = 'bacord-pdf-preview-wrap';
+              comp.element.appendChild(wrap);
+            }
+            if (wrap._bacordSig === sig) return;
+            wrap._bacordSig = sig;
+            wrap.innerHTML = '';
+            pdfs.forEach(function(f) {
+              var frame = document.createElement('iframe');
+              frame.src = f.url;
+              frame.className = 'bacord-pdf-frame';
+              frame.title = f.name || 'PDF';
+              wrap.appendChild(frame);
+            });
+            notifyHeight();
+          });
+        } catch(e) {}
+      }
+
+      // Renders the fixed "design-time" PDF (pdfMode 'diseno' — a PDF the admin embedded while
+      // designing the form, not one the operator uploads) into the placeholder slot left in
+      // its content HTML. This can't be inlined as a raw <iframe> in the schema's `html`
+      // string — form.io runs content HTML through DOMPurify, which strips <iframe> by
+      // default, so the PDF would silently disappear. Instead the schema carries `pdfData`
+      // (the base64 data URI) as a plain property alongside the html, and this creates the
+      // iframe element directly via the DOM API, which DOMPurify never sees. Static per field
+      // (never changes after render), so this only needs to run once after initial render.
+      function renderDesignPdfs(form) {
+        try {
+          form.everyComponent(function(comp) {
+            if (!comp.component || comp.component.type !== 'content' || !comp.component.pdfData || !comp.element) return;
+            var slot = comp.element.querySelector('.bacord-pdf-design-slot');
+            if (!slot || slot._bacordFilled) return;
+            slot._bacordFilled = true;
+            var frame = document.createElement('iframe');
+            frame.src = comp.component.pdfData;
+            frame.className = 'bacord-pdf-frame';
+            frame.title = comp.component.label || 'PDF';
+            slot.appendChild(frame);
+            notifyHeight();
+          });
+        } catch(e) {}
       }
 
       function wrapDatagrids() {
@@ -672,6 +1022,16 @@
       }
 
       function createForm(schema, submissionData, options) {
+        if (typeof Formio === 'undefined') {
+          // The formio.full.min.js CDN script failed to load (blocked/offline/slow network).
+          // window.onload still fires in this case, so surface a clear inline message instead
+          // of silently leaving the preview blank.
+          document.getElementById('render').innerHTML =
+            '<div style="color:#DC2626;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:12px 16px;font-size:13px;margin:8px 0;">' +
+            '<strong>No se pudo cargar el motor de formularios.</strong> Verifique la conexión a internet (se requiere acceso a cdn.jsdelivr.net) y presione Reintentar.</div>';
+          notifyHeight();
+          return;
+        }
         // Save current form data before destroying so a re-render does not erase typed values.
         var savedSubmission = null;
         if (currentForm) {
@@ -682,7 +1042,10 @@
         currentSchema = schema;
         Formio.icons = 'fontawesome';
         try { patch24hSchema(schema); } catch(e) { console.warn('[render] patch24hSchema error', e); }
-        var formOptions = Object.assign({ breadcrumbSettings: { clickable: false } }, options || {});
+        // `language` drives Formio's number-formatting locale (decimal/thousands separators) for
+        // every number component in this form instance — form.io has no per-component override,
+        // so the choice is necessarily form-wide, which is exactly what's wanted here.
+        var formOptions = Object.assign({ breadcrumbSettings: { clickable: false }, language: currentLanguage }, options || {});
         Formio.createForm(document.getElementById('render'), schema, formOptions).then(function (form) {
           currentForm = form;
           var _dgRowCounts = {};
@@ -697,7 +1060,13 @@
                 if (c.validate) {
                   var hasMin = c.validate.min !== undefined && c.validate.min !== null;
                   var hasMax = c.validate.max !== undefined && c.validate.max !== null;
-                  if (hasMin || hasMax) schemaLimits[c.key] = { min: hasMin ? Number(c.validate.min) : null, max: hasMax ? Number(c.validate.max) : null, label: c.label || c.key };
+                  if (hasMin || hasMax) schemaLimits[c.key] = {
+                    min: hasMin ? Number(c.validate.min) : null,
+                    max: hasMax ? Number(c.validate.max) : null,
+                    minStrict: c.minOp === '>',
+                    maxStrict: c.maxOp === '<',
+                    label: c.label || c.key,
+                  };
                 }
                 if (c.components) extractLimits(c.components);
                 if (c.columns) c.columns.forEach(function(col) { extractLimits(col.components || []); });
@@ -711,6 +1080,8 @@
               var jsonData = JSON.stringify(form.submission, null, 4);
               document.getElementById('jsonData').value = jsonData;
               fixDisabledTextInputs();
+              applyCheckedCardState(document.getElementById('render'));
+              renderPdfPreviews(form);
               notifyHeight();
               window.top.postMessage({ type: 'GET_JSONDATA', value: jsonData }, '*');
               // Only check ranges when a field actually changes — changeEvt.changed is undefined on initial data load
@@ -729,11 +1100,13 @@
                   var num = parseFloat(val);
                   if (!isNaN(num)) {
                     var inError = false;
-                    if (limits.min !== null && num < limits.min) {
-                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (mín. ' + limits.min + ')' };
+                    var minFails = limits.min !== null && (limits.minStrict ? num <= limits.min : num < limits.min);
+                    var maxFails = limits.max !== null && (limits.maxStrict ? num >= limits.max : num > limits.max);
+                    if (minFails) {
+                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (' + (limits.minStrict ? 'debe ser mayor a ' : 'mín. ') + limits.min + ')' };
                       inError = true;
-                    } else if (limits.max !== null && num > limits.max) {
-                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (máx. ' + limits.max + ')' };
+                    } else if (maxFails) {
+                      rangeErrors[key] = { key: key, label: limits.label, message: limits.label + ': valor ' + num + ' fuera de rango (' + (limits.maxStrict ? 'debe ser menor a ' : 'máx. ') + limits.max + ')' };
                       inError = true;
                     }
                     // Apply red border directly on the component element (bypasses formio's own validation)
@@ -750,6 +1123,13 @@
           // Init after render
           setTimeout(function() {
             fixDisabledTextInputs();
+            applyRadioInlineLayout(form);
+            applyCheckedCardState(document.getElementById('render'));
+            applySurveyQuestionHeader(form);
+            setupSurveyLocks(form, document.getElementById('render'));
+            applyDataGridAddRowToggle(form);
+            renderPdfPreviews(form);
+            renderDesignPdfs(form);
             wrapDatagrids();
             initDatagridResizing();
             initDgRowCounts(form, _dgRowCounts);
@@ -759,7 +1139,14 @@
           }, 400);
           var renderEl = document.getElementById('render');
           if (renderEl._resizeObserver) renderEl._resizeObserver.disconnect();
-          var obs = new MutationObserver(function() { wrapDatagrids(); initDatagridResizing(); fixDisabledTextInputs(); });
+          // NOTE: applySurveyQuestionHeader/setupSurveyLocks/applyDataGridAddRowToggle are
+          // deliberately NOT called from here (only once after initial render, below) — two
+          // of them mutate the DOM in ways that re-fire this very observer, which previously
+          // created an infinite loop that froze the page. wrapDatagrids/initDatagridResizing/
+          // fixDisabledTextInputs/applyRadioInlineLayout/applyCheckedCardState are all
+          // idempotent (they no-op or only touch attributes on repeat calls), so they're safe
+          // to keep reacting to dynamic changes like new datagrid rows.
+          var obs = new MutationObserver(function() { wrapDatagrids(); initDatagridResizing(); fixDisabledTextInputs(); applyRadioInlineLayout(form); applyCheckedCardState(renderEl); });
           obs.observe(renderEl, { childList: true, subtree: true });
           renderEl._resizeObserver = obs;
         }).catch(function(err) {
@@ -806,6 +1193,7 @@
               '<div style="color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0;">Schema vacío — el formulario no tiene campos configurados.</div>';
             notifyHeight(); return;
           }
+          if (e.data.language) currentLanguage = e.data.language;
           try { createForm(JSON.parse(e.data.value), null, null); }
           catch(err) { console.error('RENDER_JSON parse error', err); }
         }
@@ -815,6 +1203,7 @@
               '<div style="color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0;">Schema vacío — el formulario no tiene campos configurados.</div>';
             notifyHeight(); return;
           }
+          if (e.data.language) currentLanguage = e.data.language;
           try {
             var schema = JSON.parse(e.data.value);
             lockOpMappedFields(schema, e.data.lockedKeys || []);
@@ -834,6 +1223,13 @@
           window.top.postMessage({ type: 'GETDATARESPONSE_JSON', value: document.getElementById('jsonData').value }, '*');
         }
       });
+
+      // Tell the parent we're ready to receive RENDER_JSON — sent only after the message
+      // listener above is wired up, so the parent can safely queue-and-flush instead of
+      // guessing a fixed delay (the previous fixed setTimeout was the root cause of the
+      // preview intermittently failing to load: on a slow/cold CDN fetch of formio.full.min.js,
+      // window.onload could fire well after the parent's guess had already given up).
+      window.top.postMessage({ type: 'IFRAME_READY' }, '*');
     };
   </script>
 </body>

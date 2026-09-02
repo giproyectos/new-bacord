@@ -2,12 +2,15 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { batchRecordApi } from '@/api/batchRecord'
+import { ordenProcesoApi } from '@/api/ordenProceso'
+import { usuariosApi } from '@/api/usuarios'
+import { desviacionesApi } from '@/api/desviaciones'
+import { auditoriaApi } from '@/api/auditoria'
 import { DataTable, type Column } from '@/components/shared/DataTable'
 import type { BatchRecord } from '@/types'
-import { mockOrdenes, mockBatchRecords, mockUsuarios, mockDesviaciones, mockFirmadosBR } from '@/api/mock'
 import { useAudit } from '@/hooks/useAudit'
 import { useAuthStore } from '@/stores/authStore'
-import { useAuditStore } from '@/stores/auditStore'
+import { usePuedeEditar } from '@/hooks/usePermisos'
 
 const estadoCfg: Record<number, { label: string; bg: string; color: string; dot: string }> = {
   1: { label: 'En Tratamiento', bg: '#DBEAFE', color: '#1D4ED8', dot: '#3B82F6' },
@@ -30,11 +33,11 @@ function progressColor(pct: number) {
 }
 
 export function BatchRecordList() {
+  const puedeEditar  = usePuedeEditar('batch-records')
   const navigate     = useNavigate()
   const queryClient  = useQueryClient()
   const { registrar } = useAudit()
   const authUser     = useAuthStore(s => s.user)
-  const auditEntries = useAuditStore(s => s.entries)
   const [selected, setSelected]         = useState<Set<number>>(new Set())
   const [search, setSearch]             = useState('')
   const [estadoFilter, setEstadoFilter] = useState('')
@@ -43,14 +46,24 @@ export function BatchRecordList() {
   const [usuarioFilter, setUsuarioFilter] = useState('')
   const [confirmCancel, setConfirmCancel] = useState<BatchRecord | null>(null)
   const [cancelMotivo, setCancelMotivo]   = useState('')
+  const [cancelError, setCancelError]     = useState('')
+  const [cancelSaving, setCancelSaving]   = useState(false)
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['batch-records'],
     queryFn: () => batchRecordApi.buscar(),
   })
+  const { data: ordenes = [] } = useQuery({
+    queryKey: ['ordenes-proceso'],
+    queryFn: () => ordenProcesoApi.buscar(),
+  })
+  const { data: usuarios = [] } = useQuery({
+    queryKey: ['usuarios'],
+    queryFn: () => usuariosApi.listar(),
+  })
 
   const filtered = data.filter(r => {
-    const orden = mockOrdenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
+    const orden = ordenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
     const text = `${r.idBatchRecord} ${r.idFormulaControl} ${orden?.codigoMaterial ?? ''} ${orden?.descripcionMaterial ?? ''} ${r.fechaCreacion}`.toLowerCase()
     const matchText    = !search || text.includes(search.toLowerCase())
     const matchEstado  = !estadoFilter || r.idEstado === Number(estadoFilter)
@@ -70,9 +83,39 @@ export function BatchRecordList() {
   const someSelected    = selected.size > 0 && !allSelected
 
   // ── Generador de paquete de auditoría multi-lote ──────────────────────────
-  const generateMultiAuditPackage = () => {
-    const selectedBRs = mockBatchRecords.filter(r => selected.has(r.idBatchRecord))
+  const [packageBusy, setPackageBusy] = useState(false)
+  const generateMultiAuditPackage = async () => {
+    const selectedBRs = data.filter(r => selected.has(r.idBatchRecord))
     if (selectedBRs.length === 0) return
+
+    setPackageBusy(true)
+    let allDesviaciones: Awaited<ReturnType<typeof desviacionesApi.listar>> = []
+    let firmasMap = new Map<number, Awaited<ReturnType<typeof batchRecordApi.getFirmas>>>()
+    let auditMap = new Map<number, Awaited<ReturnType<typeof auditoriaApi.consultar>>>()
+    let detalleLabelMap = new Map<number, string>()
+    try {
+      const [desv, firmasPorBR, auditPorBR, estructuraPorBR] = await Promise.all([
+        desviacionesApi.listar(),
+        Promise.all(selectedBRs.map(br => batchRecordApi.getFirmas(br.idBatchRecord))),
+        Promise.all(selectedBRs.map(br => auditoriaApi.consultar({ idEntidad: br.idBatchRecord }))),
+        Promise.all(selectedBRs.map(br => batchRecordApi.getEstructura(br.idBatchRecord))),
+      ])
+      allDesviaciones = desv
+      firmasMap = new Map(selectedBRs.map((br, i) => [br.idBatchRecord, firmasPorBR[i]]))
+      auditMap = new Map(selectedBRs.map((br, i) => [br.idBatchRecord, auditPorBR[i].filter(e => e.entidad !== 'Sesion')]))
+      for (const estructura of estructuraPorBR) {
+        for (const proceso of estructura) {
+          for (const item of proceso.detalles) {
+            detalleLabelMap.set(item.detalle.id, item.detalle.descripcion)
+          }
+        }
+      }
+    } catch {
+      setPackageBusy(false)
+      alert('No fue posible reunir la información del paquete de auditoría. Intente de nuevo.')
+      return
+    }
+    setPackageBusy(false)
 
     const now     = new Date()
     const nowFmt  = now.toLocaleString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' })
@@ -92,19 +135,10 @@ export function BatchRecordList() {
     const ESTADO_LABEL: Record<number, string> = { 1:'En Tratamiento', 2:'Finalizado', 3:'Cancelado', 4:'Liberado' }
     const ESTADO_COLOR: Record<number, string> = { 1:'#1D4ED8', 2:'#065F46', 3:'#991B1B', 4:'#5B21B6' }
     const ESTADO_BG:    Record<number, string> = { 1:'#DBEAFE', 2:'#D1FAE5', 3:'#FEE2E2', 4:'#EDE9FE' }
-    const DETALLE_IDS   = [101,102,103,201,202,203,301,302,303]
-    const DETALLE_LABEL: Record<number, string> = {
-      101:'ET1-F1 · Encabezado', 102:'ET1-F2 · Pesaje', 103:'ET1-F3 · Verificación',
-      201:'ET2-F1 · Setup Encapsuladora', 202:'ET2-F2 · Control de Proceso', 203:'ET2-F3 · Rendimiento',
-      301:'ET3-F1 · Inspección Visual', 302:'ET3-F2 · Empaque', 303:'ET3-F3 · Cierre de Lote',
-    }
 
-    const totalDesv   = mockDesviaciones.filter(d => selected.has(d.idBatchRecord))
+    const totalDesv   = allDesviaciones.filter(d => selected.has(d.idBatchRecord))
     const openDesv    = totalDesv.filter(d => d.estado === 'abierta')
-    const relevantAudit = auditEntries.filter(e =>
-      Object.keys(AUDIT_CFG).includes(e.accion) &&
-      (DETALLE_IDS.includes(Number(e.idEntidad)) || selectedBRs.some(b => b.idBatchRecord === Number(e.idEntidad)))
-    ).sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    const relevantAudit = [...auditMap.values()].flat().sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
     const css = `
       @page { margin: 20mm 18mm; }
@@ -143,8 +177,11 @@ export function BatchRecordList() {
     `
 
     // ── Portada ────────────────────────────────────────────────────────────
+    const productosPortada = Array.from(new Set(
+      selectedBRs.map(br => ordenes.find(x => x.idOrdenProceso === br.idOrdenProceso)?.descripcionMaterial).filter(Boolean)
+    )).join(' · ') || 'Múltiples productos'
     const coverBRList = selectedBRs.map(br => {
-      const o   = mockOrdenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
+      const o   = ordenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
       const est = ESTADO_LABEL[br.idEstado] ?? '—'
       const bg  = ESTADO_BG[br.idEstado] ?? '#F1F5F9'
       const col = ESTADO_COLOR[br.idEstado] ?? '#374151'
@@ -168,20 +205,16 @@ export function BatchRecordList() {
       ? '<p style="color:#059669;font-weight:600">✓ Sin desviaciones abiertas en los lotes seleccionados.</p>'
       : openDesv.map(d => `
           <div class="desv-abierta">
-            <strong>BR-${d.idBatchRecord} · ${d.detalleCode}</strong> — ${d.labelCampo}<br/>
+            <strong>BR-${d.idBatchRecord} · ${d.campo}</strong> — ${d.labelCampo}<br/>
             <span style="color:#92400E;font-size:11px">Valor ingresado: <strong>${d.valorIngresado}</strong> · ${d.descripcion}</span>
           </div>`).join('')
 
     // ── Tabla comparativa ──────────────────────────────────────────────────
     const compRows = selectedBRs.map(br => {
-      const o    = mockOrdenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
-      const desv = mockDesviaciones.filter(d => d.idBatchRecord === br.idBatchRecord)
-      const brAudit = auditEntries.filter(e =>
-        Object.keys(AUDIT_CFG).includes(e.accion) &&
-        (DETALLE_IDS.includes(Number(e.idEntidad)) || Number(e.idEntidad) === br.idBatchRecord)
-      )
-      const firmados = mockFirmadosBR[br.idBatchRecord] ?? {}
-      const numFirmas = Object.keys(firmados).length
+      const o    = ordenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
+      const desv = allDesviaciones.filter(d => d.idBatchRecord === br.idBatchRecord)
+      const brAudit = auditMap.get(br.idBatchRecord) ?? []
+      const numFirmas = (firmasMap.get(br.idBatchRecord) ?? []).length
       const col = ESTADO_COLOR[br.idEstado] ?? '#374151'
       const bg  = ESTADO_BG[br.idEstado] ?? '#F1F5F9'
       return `<tr>
@@ -199,26 +232,21 @@ export function BatchRecordList() {
 
     // ── Secciones por BR ───────────────────────────────────────────────────
     const brSections = selectedBRs.map((br, bi) => {
-      const o       = mockOrdenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
-      const desv    = mockDesviaciones.filter(d => d.idBatchRecord === br.idBatchRecord)
-      const firmados = mockFirmadosBR[br.idBatchRecord] ?? {}
-      const brAudit = [...auditEntries]
-        .filter(e => Object.keys(AUDIT_CFG).includes(e.accion) &&
-          (DETALLE_IDS.includes(Number(e.idEntidad)) || Number(e.idEntidad) === br.idBatchRecord))
+      const o       = ordenes.find(x => x.idOrdenProceso === br.idOrdenProceso)
+      const desv    = allDesviaciones.filter(d => d.idBatchRecord === br.idBatchRecord)
+      const firmados = firmasMap.get(br.idBatchRecord) ?? []
+      const brAudit = [...(auditMap.get(br.idBatchRecord) ?? [])]
         .sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
       // Firmas
-      const firmaRows = Object.entries(firmados).map(([key, f]) => {
-        if (!f) return ''
-        const parts = key.split(':')
-        const detalleId = parts[1] ? Number(parts[1]) : 0
-        const secLabel  = DETALLE_LABEL[detalleId] ?? key
+      const firmaRows = firmados.map(f => {
+        const secLabel = detalleLabelMap.get(f.idDetalle) ?? f.firma.descripcion
         return `<tr>
-          <td style="font-family:monospace;font-size:10px">${key}</td>
+          <td style="font-family:monospace;font-size:10px">${f.firma.codigo}</td>
           <td>${secLabel}</td>
-          <td><strong>${f.nombre}</strong><br/><span style="color:#94A3B8;font-family:monospace;font-size:10px">${f.loginUsuario}</span></td>
-          <td>${f.cargo}</td>
-          <td style="font-family:monospace;font-size:10px">${f.fecha} ${f.hora}</td>
+          <td><strong>${f.usuario.nombres} ${f.usuario.apellidos}</strong><br/><span style="color:#94A3B8;font-family:monospace;font-size:10px">${f.usuario.login}</span></td>
+          <td>${f.firma.grupo.nombre}</td>
+          <td style="font-family:monospace;font-size:10px">${new Date(f.firmadoEn).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}</td>
         </tr>`
       }).join('')
 
@@ -228,14 +256,14 @@ export function BatchRecordList() {
         : desv.map(d => `
             <div class="${d.estado === 'abierta' ? 'desv-abierta' : 'desv-cerrada'}">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <strong>${d.detalleCode} · ${d.labelCampo}</strong>
+                <strong>${d.campo} · ${d.labelCampo}</strong>
                 <span class="badge" style="background:${d.estado==='abierta'?'#FEF3C7':'#D1FAE5'};color:${d.estado==='abierta'?'#92400E':'#065F46'};border-color:${d.estado==='abierta'?'#FDE68A':'#6EE7B7'}">
                   ${d.estado.toUpperCase()}
                 </span>
               </div>
               <div style="font-size:11px;color:#374151">${d.descripcion}</div>
               <div style="font-size:10px;color:#94A3B8;margin-top:4px">
-                Valor: <strong>${d.valorIngresado}</strong> · ${d.limiteInfo} · ${d.usuario} · ${d.fechaHora}
+                Valor: <strong>${d.valorIngresado}</strong> · ${d.limiteInfo} · ${d.usuarioReporta.nombres} ${d.usuarioReporta.apellidos} · ${d.fechaHora}
               </div>
             </div>`).join('')
 
@@ -247,7 +275,7 @@ export function BatchRecordList() {
             const d    = new Date(e.timestamp)
             const fec  = d.toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'numeric'})
             const hor  = d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-            const sec  = DETALLE_LABEL[Number(e.idEntidad)] ?? e.descripcionEntidad
+            const sec  = e.descripcionEntidad
             const det  = e.cambios && e.cambios.length > 0
               ? e.cambios.map(c => `<span style="font-size:10px">${c.etiqueta}: <span class="val-ant">${c.valorAnterior||'—'}</span> → <span class="val-nv">${c.valorNuevo||'—'}</span></span>`).join('<br/>')
               : (e.motivo ? `<em style="color:#92400E">${e.motivo}</em>` : '—')
@@ -305,7 +333,7 @@ export function BatchRecordList() {
           <!-- Firmas -->
           <div class="sec">
             <div class="sec-title">4.${bi+1}.2 · Registro de Firmas y Verificaciones</div>
-            ${Object.keys(firmados).length === 0
+            ${firmados.length === 0
               ? '<p style="color:#94A3B8;font-size:11px">Sin firmas registradas para este BR.</p>'
               : `<table>
                   <tr><th>Clave</th><th>Sección</th><th>Firmante</th><th>Cargo</th><th>Fecha / Hora</th></tr>
@@ -354,7 +382,7 @@ export function BatchRecordList() {
 
 <!-- ══ PORTADA ══ -->
 <div class="pg-header">
-  <div style="font-size:10px;color:rgba(255,255,255,.6);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">SYNAPTOMAX 250 mg — Cápsulas de Liberación Modificada</div>
+  <div style="font-size:10px;color:rgba(255,255,255,.6);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">${productosPortada}</div>
   <h1 style="color:#fff;font-size:26px;margin:0 0 4px">Paquete de Auditoría Multi-Lote</h1>
   <div class="pg-header-sub">${pkgNum} &nbsp;·&nbsp; Documento GMP Confidencial &nbsp;·&nbsp; Generado: ${nowFmt}</div>
 </div>
@@ -458,7 +486,7 @@ ${brSections}
       <tr><td>BRs incluidos</td><td>${selectedBRs.map(b=>`BR-${b.idBatchRecord}`).join(', ')}</td></tr>
       <tr><td>Total eventos de auditoría</td><td>${relevantAudit.length}</td></tr>
       <tr><td>Total desviaciones</td><td>${totalDesv.length} (${openDesv.length} abierta(s))</td></tr>
-      <tr><td>Sistema</td><td>BACord EBR v1.0 — Batch Record Demo</td></tr>
+      <tr><td>Sistema</td><td>BACord EBR v1.0 — Registro Electrónico de Lotes</td></tr>
       <tr><td>Clasificación</td><td><strong style="color:#991B1B">CONFIDENCIAL — Solo uso interno GMP</strong></td></tr>
     </table>
   </div>
@@ -511,7 +539,7 @@ ${brSections}
     {
       key: 'idOrdenProceso', header: 'Orden', width: '110px',
       render: r => {
-        const o = mockOrdenes.find(x => x.idOrdenProceso === r.idOrdenProceso)
+        const o = ordenes.find(x => x.idOrdenProceso === r.idOrdenProceso)
         return (
           <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--ink-3)' }}>
             {o?.numeroOrdenProceso ?? `OP-${r.idOrdenProceso}`}
@@ -522,7 +550,7 @@ ${brSections}
     {
       key: 'material', header: 'Material / Producto',
       render: r => {
-        const o = mockOrdenes.find(x => x.idOrdenProceso === r.idOrdenProceso)
+        const o = ordenes.find(x => x.idOrdenProceso === r.idOrdenProceso)
         return o ? (
           <div>
             <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--ink)', lineHeight: 1.35 }}>
@@ -604,7 +632,7 @@ ${brSections}
           >
             <i className="fa fa-eye" aria-hidden="true" />
           </button>
-          {r.idEstado === 1 && (
+          {r.idEstado === 1 && puedeEditar && (
             <button
               className="dt-ab dt-ab-del"
               title="Cancelar batch record"
@@ -810,7 +838,7 @@ ${brSections}
           aria-label="Filtrar por operario"
         >
           <option value="">Todos los operarios</option>
-          {mockUsuarios.map(u => (
+          {usuarios.map(u => (
             <option key={u.idUsuario} value={u.idUsuario}>
               {u.nombres} {u.apellidos}
             </option>
@@ -863,9 +891,9 @@ ${brSections}
           <button className="br-float-clear" onClick={() => setSelected(new Set())}>
             Limpiar
           </button>
-          <button className="br-float-btn" onClick={generateMultiAuditPackage}>
-            <i className="fa fa-file-pdf" aria-hidden="true" />
-            Exportar paquete de auditoría
+          <button className="br-float-btn" onClick={generateMultiAuditPackage} disabled={packageBusy} aria-disabled={packageBusy}>
+            <i className={`fa ${packageBusy ? 'fa-spinner fa-spin' : 'fa-file-pdf'}`} aria-hidden="true" />
+            {packageBusy ? 'Generando…' : 'Exportar paquete de auditoría'}
           </button>
         </div>
       )}
@@ -927,41 +955,41 @@ ${brSections}
               <div id="cancel-motivo-hint" style={{ fontSize:11.5,color:'var(--ink-4)',marginTop:5 }}>
                 El motivo quedará registrado en el historial de auditoría.
               </div>
+              {cancelError && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <i className="fa fa-exclamation-circle" /> {cancelError}
+                </div>
+              )}
             </div>
 
             {/* Modal footer */}
             <div style={{ padding:'12px 22px 16px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
               <button
                 className="btn btn-gray"
-                onClick={() => { setConfirmCancel(null); setCancelMotivo('') }}
+                onClick={() => { setConfirmCancel(null); setCancelMotivo(''); setCancelError('') }}
               >
                 <i className="fa fa-undo" aria-hidden="true" /> Volver
               </button>
               <button
                 className="btn btn-danger"
-                disabled={!cancelMotivo.trim()}
-                aria-disabled={!cancelMotivo.trim()}
-                onClick={() => {
+                disabled={!cancelMotivo.trim() || cancelSaving}
+                aria-disabled={!cancelMotivo.trim() || cancelSaving}
+                onClick={async () => {
                   if (!cancelMotivo.trim()) return
-                  const idx = mockBatchRecords.findIndex(b => b.idBatchRecord === confirmCancel.idBatchRecord)
-                  if (idx >= 0) {
-                    mockBatchRecords[idx].idEstado = 3
-                    mockBatchRecords[idx].motivoEstado = cancelMotivo.trim()
+                  setCancelError('')
+                  setCancelSaving(true)
+                  try {
+                    const res = await batchRecordApi.cancelar(confirmCancel.idBatchRecord, cancelMotivo.trim())
+                    if (!res.estado) { setCancelError(res.mensaje); return }
+                    queryClient.invalidateQueries({ queryKey: ['batch-records'] })
+                    setConfirmCancel(null)
+                    setCancelMotivo('')
+                  } finally {
+                    setCancelSaving(false)
                   }
-                  registrar({
-                    entidad: 'BatchRecord',
-                    idEntidad: confirmCancel.idBatchRecord,
-                    descripcionEntidad: `BR-${confirmCancel.idBatchRecord}`,
-                    accion: 'CANCELAR',
-                    modulo: 'batch-records',
-                    motivo: cancelMotivo.trim(),
-                  })
-                  queryClient.invalidateQueries({ queryKey: ['batch-records'] })
-                  setConfirmCancel(null)
-                  setCancelMotivo('')
                 }}
               >
-                <i className="fa fa-ban" aria-hidden="true" /> Sí, cancelar
+                <i className="fa fa-ban" aria-hidden="true" /> {cancelSaving ? 'Cancelando…' : 'Sí, cancelar'}
               </button>
             </div>
           </div>

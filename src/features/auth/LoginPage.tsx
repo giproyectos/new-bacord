@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
-import { useAuditStore } from '@/stores/auditStore'
-import { randomUUID } from '@/utils/uuid'
 
 export function LoginPage() {
   const [login, setLogin] = useState('')
@@ -12,45 +10,34 @@ export function LoginPage() {
   const [error, setError] = useState('')
   const [showRecuperar, setShowRecuperar] = useState(false)
   const [email, setEmail] = useState('')
+  const [recuperarEnviando, setRecuperarEnviando] = useState(false)
+  const [recuperarMensaje, setRecuperarMensaje] = useState('')
   const setAuth = useAuthStore((s) => s.login)
   const navigate = useNavigate()
+
+  const cerrarRecuperar = () => { setShowRecuperar(false); setEmail(''); setRecuperarMensaje('') }
+
+  const handleRecuperar = async () => {
+    if (!email) return
+    setRecuperarEnviando(true)
+    try {
+      const res = await authApi.olvideClave(email)
+      setRecuperarMensaje(res.mensaje)
+    } catch {
+      setRecuperarMensaje('Si el correo está registrado, se envió un enlace para restablecer la contraseña.')
+    } finally {
+      setRecuperarEnviando(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!login || !clave) return
     setLoading(true); setError('')
-    const addAudit = useAuditStore.getState().add
     try {
       const user = await authApi.login(login, clave)
-      addAudit({
-        id: randomUUID(),
-        timestamp: new Date().toISOString(),
-        idUsuario: user.idUsuario,
-        nombreUsuario: `${user.nombres} ${user.apellidos}`,
-        loginUsuario: user.login,
-        cargo: 'Usuario del sistema',
-        entidad: 'Sesion',
-        idEntidad: user.idUsuario,
-        descripcionEntidad: `Inicio de sesión exitoso — ${user.login}`,
-        accion: 'LOGIN',
-        modulo: 'autenticacion',
-      })
       setAuth(user); navigate('/')
     } catch (err: unknown) {
-      addAudit({
-        id: randomUUID(),
-        timestamp: new Date().toISOString(),
-        idUsuario: 0,
-        nombreUsuario: 'Desconocido',
-        loginUsuario: login.trim() || 'desconocido',
-        cargo: '—',
-        entidad: 'Sesion',
-        idEntidad: 0,
-        descripcionEntidad: `Intento de acceso fallido — usuario: "${login.trim()}"`,
-        accion: 'LOGIN_FALLIDO',
-        modulo: 'autenticacion',
-        motivo: err instanceof Error ? err.message : 'Error desconocido',
-      })
       setError(err instanceof Error ? err.message : 'Error al iniciar sesión')
     } finally { setLoading(false) }
   }
@@ -211,29 +198,37 @@ export function LoginPage() {
             </form>
           </div>
 
-          <div className="login-hint">
-            DEMO · usuario <strong>admin</strong> · clave <strong>bacord2025</strong>
-          </div>
         </div>
       </div>
 
       {/* Modal recuperar clave */}
       {showRecuperar && (
-        <div className="modal-overlay" onClick={() => setShowRecuperar(false)}>
+        <div className="modal-overlay" onClick={cerrarRecuperar}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">Recuperar clave</div>
             <div className="modal-body">
-              Digite su email y siga las instrucciones
-              <input
-                type="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
+              {recuperarMensaje ? (
+                <p style={{ color: 'var(--forest)' }}><i className="fa fa-check-circle" /> {recuperarMensaje}</p>
+              ) : (
+                <>
+                  Digite su email y le enviaremos un enlace para restablecer su contraseña
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    autoFocus
+                  />
+                </>
+              )}
             </div>
             <div className="modal-footer">
-              <button className="btn-gray" onClick={() => setShowRecuperar(false)}>Regresar</button>
-              <button className="btn-sm-success" onClick={() => setShowRecuperar(false)}>Enviar</button>
+              <button className="btn-gray" onClick={cerrarRecuperar}>{recuperarMensaje ? 'Cerrar' : 'Regresar'}</button>
+              {!recuperarMensaje && (
+                <button className="btn-sm-success" onClick={handleRecuperar} disabled={!email || recuperarEnviando}>
+                  {recuperarEnviando ? 'Enviando…' : 'Enviar'}
+                </button>
+              )}
             </div>
           </div>
         </div>

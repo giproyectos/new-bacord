@@ -1,19 +1,13 @@
-import { useState } from 'react'
-import { mockGruposResponsables, mockFirmas, GRUPO_PALETTE } from '@/api/mock'
-import { GRUPOS } from '@/types'
+import { useEffect, useState } from 'react'
+import { gruposResponsablesApi } from '@/api/gruposResponsables'
+import { GRUPO_PALETTE, colorForKey } from '@/utils/colorPalette'
+import { usePuedeEditar } from '@/hooks/usePermisos'
 import type { GrupoResponsable } from '@/types'
 
 const PALETTE_KEYS = Object.keys(GRUPO_PALETTE)
 
-// Cuántas firmas del catálogo referencian este grupo
-function usageCount(nombre: string): number {
-  const entry = Object.entries(GRUPOS).find(([, v]) => v === nombre)
-  if (!entry) return 0
-  return mockFirmas.filter(f => f.idGrupo === Number(entry[0])).length
-}
-
 function DotColor({ colorKey, size = 12 }: { colorKey: string; size?: number }) {
-  const c = GRUPO_PALETTE[colorKey] ?? GRUPO_PALETTE['slate']
+  const c = colorForKey(colorKey)
   return <span style={{ display: 'inline-block', width: size, height: size, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
 }
 
@@ -44,41 +38,40 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (k: string)
 const EMPTY = { nombre: '', descripcion: '', colorKey: 'blue' }
 
 export function GruposResponsablesList() {
-  const [grupos, setGrupos] = useState<GrupoResponsable[]>([...mockGruposResponsables])
+  const puedeEditar = usePuedeEditar('grupos-responsables')
+  const [grupos, setGrupos] = useState<GrupoResponsable[]>([])
+  const [loading, setLoading] = useState(true)
   const [modal, setModal]   = useState<{ mode: 'crear' | 'editar'; item?: GrupoResponsable } | null>(null)
   const [form,  setForm]    = useState(EMPTY)
   const [warn,  setWarn]    = useState<GrupoResponsable | null>(null)
   const [err,   setErr]     = useState('')
+
+  const cargar = () => gruposResponsablesApi.listar().then(setGrupos).finally(() => setLoading(false))
+  useEffect(() => { cargar() }, [])
 
   const set = (k: keyof typeof EMPTY, v: string) => { setForm(f => ({ ...f, [k]: v })); setErr('') }
 
   const openCrear  = () => { setForm(EMPTY); setErr(''); setModal({ mode: 'crear' }) }
   const openEditar = (g: GrupoResponsable) => { setForm({ nombre: g.nombre, descripcion: g.descripcion, colorKey: g.colorKey }); setErr(''); setModal({ mode: 'editar', item: g }) }
 
-  const guardar = () => {
+  const guardar = async () => {
     if (!form.nombre.trim()) { setErr('El nombre es requerido'); return }
-    const dup = grupos.some(g => g.nombre.toLowerCase() === form.nombre.trim().toLowerCase() && (modal?.mode === 'crear' || g.id !== modal?.item?.id))
-    if (dup) { setErr('Ya existe un grupo con ese nombre'); return }
-    if (modal?.mode === 'crear') {
-      const nuevo: GrupoResponsable = { id: Math.max(0, ...grupos.map(g => g.id)) + 1, nombre: form.nombre.trim(), descripcion: form.descripcion.trim(), colorKey: form.colorKey }
-      setGrupos(gs => [...gs, nuevo])
-      mockGruposResponsables.push(nuevo)
-    } else if (modal?.item) {
-      const upd = { ...modal.item, nombre: form.nombre.trim(), descripcion: form.descripcion.trim(), colorKey: form.colorKey }
-      setGrupos(gs => gs.map(g => g.id === upd.id ? upd : g))
-      const i = mockGruposResponsables.findIndex(g => g.id === upd.id)
-      if (i !== -1) mockGruposResponsables[i] = upd
-    }
+    const data = { nombre: form.nombre.trim(), descripcion: form.descripcion.trim(), colorKey: form.colorKey }
+    const res = modal?.mode === 'crear'
+      ? await gruposResponsablesApi.crear(data)
+      : await gruposResponsablesApi.actualizar(modal!.item!.id, data)
+    if (!res.estado) { setErr(res.mensaje); return }
     setModal(null)
+    cargar()
   }
 
-  const pedirEliminar = (g: GrupoResponsable) => usageCount(g.nombre) > 0 ? setWarn(g) : doEliminar(g)
-  const doEliminar    = (g: GrupoResponsable) => {
-    setGrupos(gs => gs.filter(x => x.id !== g.id))
-    const i = mockGruposResponsables.findIndex(x => x.id === g.id)
-    if (i !== -1) mockGruposResponsables.splice(i, 1)
+  const doEliminar = async (g: GrupoResponsable) => {
+    await gruposResponsablesApi.eliminar(g.id)
     setWarn(null)
+    cargar()
   }
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}><i className="fa fa-spinner fa-spin" /></div>
 
   return (
     <>
@@ -98,16 +91,23 @@ export function GruposResponsablesList() {
             Define los grupos de tu organización. El color se propaga automáticamente a Firmas, Usuarios y Estrategias.
           </p>
         </div>
-        <button className="btn btn-primary" onClick={openCrear} style={{ flexShrink:0 }}>
-          <i className="fa fa-plus" /> Nuevo grupo
-        </button>
+        {puedeEditar && (
+          <button className="btn btn-primary" onClick={openCrear} style={{ flexShrink:0 }}>
+            <i className="fa fa-plus" /> Nuevo grupo
+          </button>
+        )}
       </div>
+
+      {grupos.length === 0 && (
+        <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--ink-4)', fontSize: 13 }}>
+          Aún no hay grupos responsables configurados. Crea el primero.
+        </div>
+      )}
 
       {/* Grid de tarjetas */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))', gap:14 }}>
         {grupos.map(g => {
-          const c   = GRUPO_PALETTE[g.colorKey] ?? GRUPO_PALETTE['slate']
-          const uso = usageCount(g.nombre)
+          const c = colorForKey(g.colorKey)
           return (
             <div key={g.id} className="gr-card">
               <div style={{ height:5, background:c.dot }} />
@@ -120,23 +120,20 @@ export function GruposResponsablesList() {
                   {g.descripcion || <em>Sin descripción</em>}
                 </p>
               </div>
-              <div style={{ padding:'8px 14px', borderTop:'1px solid var(--hair)', display:'flex', alignItems:'center', justifyContent:'space-between', background:'var(--paper-2)' }}>
-                <span style={{ fontSize:11.5, color:'var(--ink-4)', fontFamily:'var(--f-mono)' }}>
-                  {uso > 0
-                    ? <><i className="fa fa-pen" style={{ marginRight:4, color:c.dot }} />{uso} firma{uso !== 1 ? 's' : ''}</>
-                    : <span style={{ opacity:0.55 }}>Sin firmas asociadas</span>}
-                </span>
-                <div style={{ display:'flex', gap:2 }}>
-                  <button className="gr-icn" title="Editar" onClick={() => openEditar(g)}><i className="fa fa-pencil-alt" /></button>
-                  <button className="gr-icn del" title="Eliminar" onClick={() => pedirEliminar(g)}><i className="fa fa-trash-alt" /></button>
+              {puedeEditar && (
+                <div style={{ padding:'8px 14px', borderTop:'1px solid var(--hair)', display:'flex', alignItems:'center', justifyContent:'flex-end', background:'var(--paper-2)' }}>
+                  <div style={{ display:'flex', gap:2 }}>
+                    <button className="gr-icn" title="Editar" onClick={() => openEditar(g)}><i className="fa fa-pencil-alt" /></button>
+                    <button className="gr-icn del" title="Eliminar" onClick={() => setWarn(g)}><i className="fa fa-trash-alt" /></button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )
         })}
 
         {/* Tarjeta fantasma */}
-        <button onClick={openCrear} style={{
+        {puedeEditar && <button onClick={openCrear} style={{
           background:'none', border:'2px dashed var(--hair-2)', borderRadius:'var(--r-md)',
           cursor:'pointer', padding:'28px 16px', display:'flex', flexDirection:'column',
           alignItems:'center', justifyContent:'center', gap:8, color:'var(--ink-4)',
@@ -146,7 +143,7 @@ export function GruposResponsablesList() {
           onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--hair-2)'; el.style.color='var(--ink-4)' }}>
           <i className="fa fa-plus-circle" style={{ fontSize:24 }} />
           <span style={{ fontSize:13, fontWeight:600 }}>Nuevo grupo</span>
-        </button>
+        </button>}
       </div>
 
       {/* Modal crear / editar */}
@@ -199,8 +196,8 @@ export function GruposResponsablesList() {
                   <span style={{
                     display:'inline-flex', alignItems:'center', gap:6, padding:'3px 11px',
                     borderRadius:20, fontSize:12.5, fontWeight:600,
-                    background:(GRUPO_PALETTE[form.colorKey] ?? GRUPO_PALETTE['slate']).bg,
-                    color:(GRUPO_PALETTE[form.colorKey] ?? GRUPO_PALETTE['slate']).text,
+                    background: colorForKey(form.colorKey).bg,
+                    color: colorForKey(form.colorKey).text,
                   }}>
                     <DotColor colorKey={form.colorKey} size={8} />
                     {form.nombre || 'Nombre del grupo'}
@@ -222,7 +219,7 @@ export function GruposResponsablesList() {
         </div>
       )}
 
-      {/* Advertencia eliminar con firmas */}
+      {/* Confirmar eliminar */}
       {warn && (
         <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(10,21,48,.45)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}
           onClick={() => setWarn(null)}>
@@ -234,17 +231,16 @@ export function GruposResponsablesList() {
               </div>
               <div>
                 <div style={{ fontWeight:700, fontSize:14, color:'var(--ink)', marginBottom:6 }}>
-                  Grupo con firmas asociadas
+                  Desactivar grupo
                 </div>
                 <div style={{ fontSize:13, color:'var(--ink-3)', lineHeight:1.5 }}>
-                  <strong>{warn.nombre}</strong> está asignado a {usageCount(warn.nombre)} firma{usageCount(warn.nombre) !== 1 ? 's' : ''} del catálogo.
-                  Al eliminarlo, esas firmas quedarán sin grupo responsable.
+                  ¿Desactivar <strong>{warn.nombre}</strong>? Las firmas o usuarios que lo referencien quedarán sin ese grupo.
                 </div>
               </div>
             </div>
             <div style={{ padding:'14px 22px', borderTop:'1px solid var(--hair)', display:'flex', justifyContent:'flex-end', gap:8 }}>
               <button className="btn btn-gray" onClick={() => setWarn(null)}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-danger" onClick={() => doEliminar(warn)}><i className="fa fa-trash-alt" /> Eliminar igual</button>
+              <button className="btn btn-danger" onClick={() => doEliminar(warn)}><i className="fa fa-trash-alt" /> Desactivar</button>
             </div>
           </div>
         </div>

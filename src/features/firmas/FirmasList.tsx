@@ -1,20 +1,32 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CatalogPage } from '@/components/shared/CatalogPage'
-import { mockFirmas, mockGruposResponsables, getGrupoColor } from '@/api/mock'
-import { GRUPOS } from '@/types'
-import type { Firma } from '@/types'
-
-// Options dynamically come from the configurable groups
-const getGrupoOptions = () =>
-  mockGruposResponsables.map(g => ({ value: String(g.id), label: g.nombre }))
+import { firmasApi, type FirmaApi } from '@/api/firmas'
+import { gruposResponsablesApi } from '@/api/gruposResponsables'
+import { colorForKey } from '@/utils/colorPalette'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import type { GrupoResponsable } from '@/types'
 
 export function FirmasList() {
-  const [data, setData] = useState<Firma[]>(mockFirmas)
+  const [data, setData] = useState<FirmaApi[]>([])
+  const [grupos, setGrupos] = useState<GrupoResponsable[]>([])
+  const [loading, setLoading] = useState(true)
+  const puedeEditar = usePuedeEditar('firmas')
+
+  const cargar = () => Promise.all([firmasApi.listar(), gruposResponsablesApi.listar()]).then(([firmas, gs]) => {
+    setData(firmas)
+    setGrupos(gs)
+  }).finally(() => setLoading(false))
+  useEffect(() => { cargar() }, [])
+
+  const grupoOptions = grupos.map(g => ({ value: String(g.id), label: g.nombre }))
 
   return (
-    <CatalogPage<Firma>
+    <CatalogPage<FirmaApi>
       panelTitle="Lista de firmas"
       data={data}
+      loading={loading}
+      canCreate={puedeEditar}
+      canEdit={puedeEditar}
       columns={[
         { key: 'codigo',      header: 'Código',      width: '10%',
           render: r => <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5, color: 'var(--navy)', fontWeight: 600 }}>{r.codigo}</span> },
@@ -22,13 +34,12 @@ export function FirmasList() {
         { key: 'texto',       header: 'Texto' },
         { key: 'idGrupo',     header: 'Grupo',       width: '14%',
           render: r => {
-            const nombre = GRUPOS[r.idGrupo]
-            if (!nombre) return <span style={{ color: 'var(--ink-4)' }}>—</span>
-            const c = getGrupoColor(nombre)
+            if (!r.grupo) return <span style={{ color: 'var(--ink-4)' }}>—</span>
+            const c = colorForKey(r.grupo.colorKey)
             return (
               <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 20, background: c.bg, color: c.text, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
-                {nombre}
+                {r.grupo.nombre}
               </span>
             )
           },
@@ -41,20 +52,18 @@ export function FirmasList() {
         { key: 'codigo',      label: 'Código',            required: true },
         { key: 'descripcion', label: 'Descripción',       required: true },
         { key: 'texto',       label: 'Texto de la firma', required: true },
-        { key: 'idGrupo',     label: 'Grupo responsable', required: true, type: 'select', options: getGrupoOptions() },
+        { key: 'idGrupo',     label: 'Grupo responsable', required: true, type: 'select', options: grupoOptions },
       ]}
-      onSave={(values, isEdit) => {
+      onSave={async (values, isEdit) => {
         if (isEdit) {
-          setData(d => d.map(f => f.codigo === values.codigo
-            ? { ...f, descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) }
-            : f
-          ))
+          const row = data.find(f => f.codigo === values.codigo)
+          if (row) await firmasApi.actualizar(row.idFirma, { descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) })
         } else {
-          const newId = Math.max(0, ...data.map(f => f.idFirma)) + 1
-          setData(d => [...d, { idFirma: newId, codigo: values.codigo, descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo), activo: 1 }])
+          await firmasApi.crear({ codigo: values.codigo, descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) })
         }
+        cargar()
       }}
-      onDelete={row => setData(d => d.filter(f => f.idFirma !== row.idFirma))}
+      onDelete={async row => { await firmasApi.eliminar(row.idFirma); cargar() }}
     />
   )
 }

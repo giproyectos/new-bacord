@@ -5,7 +5,11 @@ import {
   Filler, Title,
 } from 'chart.js'
 import { Doughnut, Bar } from 'react-chartjs-2'
-import { mockBatchRecords, mockOrdenes, mockUsuarios, mockDesviaciones } from '@/api/mock'
+import { useQuery, useQueries } from '@tanstack/react-query'
+import { batchRecordApi } from '@/api/batchRecord'
+import { ordenProcesoApi } from '@/api/ordenProceso'
+import { usuariosApi } from '@/api/usuarios'
+import { desviacionesApi } from '@/api/desviaciones'
 
 ChartJS.register(
   ArcElement, Tooltip, Legend,
@@ -42,15 +46,6 @@ function relTime(iso: string): string {
   return `${Math.floor(days / 30)}m`
 }
 
-function getPendientesFirma(avance: number, brId: number, material: string) {
-  const base = { br: `BR-${brId}`, material }
-  if (avance === 0)  return [{ ...base, etapa: 'Etapa 1 · Dispensación',         firma: 'Operador + Supervisor', urgente: false }]
-  if (avance < 40)  return [{ ...base, etapa: 'Etapa 2 · Encapsulación',         firma: 'Operador de Producción', urgente: false }]
-  if (avance < 70)  return [{ ...base, etapa: 'Etapa 3 · Empaque',               firma: 'Supervisor de Calidad',  urgente: false }]
-  if (avance < 100) return [{ ...base, etapa: 'Etapa 3 · Cierre de Lote',        firma: 'Director de Calidad',    urgente: avance >= 85 }]
-  return []
-}
-
 function progressGrad(avance: number) {
   if (avance >= 80) return { grad: 'linear-gradient(90deg,#059669,#34D399)', border: '#059669' }
   if (avance >= 50) return { grad: 'linear-gradient(90deg,#0891B2,#22D3EE)', border: '#0891B2' }
@@ -59,78 +54,113 @@ function progressGrad(avance: number) {
 }
 
 export function DashboardPage() {
+  const { data: batchRecords = [] } = useQuery({ queryKey: ['batch-records'], queryFn: () => batchRecordApi.buscar() })
+  const { data: ordenes = [] } = useQuery({ queryKey: ['ordenes-proceso'], queryFn: () => ordenProcesoApi.buscar() })
+  const { data: usuarios = [] } = useQuery({ queryKey: ['usuarios'], queryFn: () => usuariosApi.listar() })
+  const { data: desviaciones = [] } = useQuery({ queryKey: ['desviaciones'], queryFn: () => desviacionesApi.listar() })
+
   // ── Lotes activos ─────────────────────────────────────────────────────────
-  const brsActivos = mockBatchRecords
+  const brsActivosBase = batchRecords
     .filter(br => br.idEstado === 1)
     .map(br => {
-      const op  = mockOrdenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
+      const op  = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
       const dias = Math.floor((Date.now() - new Date(br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
-      const av  = br.porcentajeAvance ?? 0
       return {
         id: br.idBatchRecord,
         codigo: `BR-${br.idBatchRecord}`,
         material: op?.codigoMaterial ?? '—',
         producto: op?.descripcionMaterial?.split(' ').slice(0, 5).join(' ') ?? '—',
-        avance: av,
+        avance: br.porcentajeAvance ?? 0,
         dias,
-        etapa: av < 34 ? 'Etapa 1 · Dispensación' : av < 67 ? 'Etapa 2 · Encapsulación' : 'Etapa 3 · Empaque',
         fechaCreacion: br.fechaCreacion,
       }
     })
-    .sort((a, b) => b.avance - a.avance)
+
+  const estructuraQueries = useQueries({
+    queries: brsActivosBase.map(br => ({ queryKey: ['br-estructura', br.id], queryFn: () => batchRecordApi.getEstructura(br.id) })),
+  })
+  const firmasQueries = useQueries({
+    queries: brsActivosBase.map(br => ({ queryKey: ['br-firmas', br.id], queryFn: () => batchRecordApi.getFirmas(br.id) })),
+  })
+
+  // ── Pendientes de firma (calculado contra la estructura real de la receta) ─
+  const pendientes: { br: string; material: string; etapa: string; firma: string; urgente: boolean }[] = []
+  const brsActivos = brsActivosBase.map((br, i) => {
+    const estructura = estructuraQueries[i]?.data ?? []
+    const firmas = firmasQueries[i]?.data ?? []
+    const firmadoSet = new Set(firmas.filter(f => f.bloqueKey === '').map(f => `${f.idDetalle}:${f.idFirma}`))
+    let etapa = estructura.length > 0 ? 'Completado' : '—'
+    for (const proceso of estructura) {
+      let pendienteEnProceso = false
+      for (const item of proceso.detalles) {
+        const requeridas = item.detalle.estrategiaFirma?.firmas.filter(f => f.activo) ?? []
+        const faltantes = requeridas.filter(f => !firmadoSet.has(`${item.detalle.id}:${f.idFirma}`))
+        if (faltantes.length > 0) {
+          pendienteEnProceso = true
+          pendientes.push({
+            br: br.codigo, material: br.material,
+            etapa: `${proceso.proceso.descripcion} · ${item.detalle.descripcion}`,
+            firma: faltantes.map(f => f.firma.grupo.nombre).join(', '),
+            urgente: (br.avance ?? 0) >= 85,
+          })
+        }
+      }
+      if (pendienteEnProceso) { etapa = proceso.proceso.descripcion; break }
+    }
+    return { ...br, etapa }
+  }).sort((a, b) => b.avance - a.avance)
 
   const avanceProm = brsActivos.length
     ? Math.round(brsActivos.reduce((s, b) => s + b.avance, 0) / brsActivos.length)
     : 0
 
-  // ── Pendientes de firma ───────────────────────────────────────────────────
-  const pendientes = brsActivos.flatMap(br => getPendientesFirma(br.avance, br.id, br.material))
-  const urgentes   = pendientes.filter(p => p.urgente).length
+  const urgentes = pendientes.filter(p => p.urgente).length
 
   // ── Alertas ───────────────────────────────────────────────────────────────
   type Alerta = { nivel: 'alta' | 'media' | 'baja'; icon: string; titulo: string; detalle: string }
   const alertas: Alerta[] = []
   brsActivos.forEach(br => {
-    if (br.avance >= 85)
-      alertas.push({ nivel: 'alta',  icon: 'fa-pen-nib',         titulo: `${br.codigo} · Cierre pendiente de firma`, detalle: `${br.producto} · requiere Director de Calidad` })
+    const pendientesBR = pendientes.filter(p => p.br === br.codigo)
+    if (br.avance >= 85 && pendientesBR.length > 0)
+      alertas.push({ nivel: 'alta',  icon: 'fa-pen-nib',         titulo: `${br.codigo} · Cierre pendiente de firma`, detalle: `${br.producto} · requiere ${Array.from(new Set(pendientesBR.map(p => p.firma))).join(', ')}` })
     if (br.dias >= 10 && br.avance < 50)
       alertas.push({ nivel: 'media', icon: 'fa-clock',           titulo: `${br.codigo} · Sin actividad hace ${br.dias} días`, detalle: `${br.producto} · ${br.etapa}` })
     if (br.avance === 0 && br.dias >= 5)
       alertas.push({ nivel: 'baja',  icon: 'fa-hourglass-start', titulo: `${br.codigo} · Proceso no iniciado`, detalle: `${br.producto} · creado hace ${br.dias} días` })
   })
-  mockBatchRecords.filter(br => br.idEstado === 3).forEach(br => {
-    const op = mockOrdenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
+  batchRecords.filter(br => br.idEstado === 3).forEach(br => {
+    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
     alertas.push({ nivel: 'media', icon: 'fa-ban', titulo: `BR-${br.idBatchRecord} · Lote cancelado`, detalle: `${op?.codigoMaterial ?? '—'} · ${br.motivoEstado?.slice(0, 60) || 'sin motivo'}` })
   })
-  mockDesviaciones.filter(d => d.estado === 'abierta').forEach(d => {
-    alertas.push({ nivel: 'alta', icon: 'fa-triangle-exclamation', titulo: `BR-${d.idBatchRecord} · Desviación abierta — ${d.detalleCode}`, detalle: `${d.labelCampo} — valor registrado: ${d.valorIngresado}` })
+  desviaciones.filter(d => d.estado === 'abierta').forEach(d => {
+    alertas.push({ nivel: 'alta', icon: 'fa-triangle-exclamation', titulo: `BR-${d.idBatchRecord} · Desviación abierta — ${d.campo}`, detalle: `${d.labelCampo} — valor registrado: ${d.valorIngresado}` })
   })
 
   // ── Donut ─────────────────────────────────────────────────────────────────
   const cnt = {
-    trat: mockBatchRecords.filter(b => b.idEstado === 1).length,
-    fin:  mockBatchRecords.filter(b => b.idEstado === 2).length,
-    can:  mockBatchRecords.filter(b => b.idEstado === 3).length,
-    lib:  mockBatchRecords.filter(b => b.idEstado === 4).length,
-    tot:  mockBatchRecords.length,
+    trat: batchRecords.filter(b => b.idEstado === 1).length,
+    fin:  batchRecords.filter(b => b.idEstado === 2).length,
+    can:  batchRecords.filter(b => b.idEstado === 3).length,
+    lib:  batchRecords.filter(b => b.idEstado === 4).length,
+    tot:  batchRecords.length,
   }
 
   // ── Bar ───────────────────────────────────────────────────────────────────
   const matMap: Record<string, number> = {}
-  mockBatchRecords.forEach(br => {
-    const op = mockOrdenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
+  batchRecords.forEach(br => {
+    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
     if (op) matMap[op.codigoMaterial] = (matMap[op.codigoMaterial] ?? 0) + 1
   })
   const matEntries = Object.entries(matMap).sort((a, b) => b[1] - a[1]).slice(0, 6)
   const barGrads   = ['#1D4ED8', '#EA580C', '#0891B2', '#059669', '#7C3AED', '#DB2777']
 
   // ── Actividad ─────────────────────────────────────────────────────────────
-  const recent = [...mockBatchRecords]
+  const recent = [...batchRecords]
     .sort((a, b) => new Date(b.fechaCreacion).getTime() - new Date(a.fechaCreacion).getTime())
     .slice(0, 6)
     .map(br => {
-      const op   = mockOrdenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-      const user = mockUsuarios.find(u => u.idUsuario === br.idUsuarioCreacion)
+      const op   = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
+      const user = usuarios.find(u => u.idUsuario === br.idUsuarioCreacion)
       const cfg  = { 1: { label: 'En proceso', color: C.teal }, 2: { label: 'Finalizado', color: C.forest }, 3: { label: 'Cancelado', color: C.red }, 4: { label: 'Liberado', color: C.purple } } as Record<number, {label:string;color:string}>
       return { br: `BR-${br.idBatchRecord}`, mat: op?.codigoMaterial ?? '—', estado: cfg[br.idEstado]?.label ?? '?', color: cfg[br.idEstado]?.color ?? C.slate, user: user?.login ?? 'sistema', tiempo: relTime(br.fechaCreacion) }
     })

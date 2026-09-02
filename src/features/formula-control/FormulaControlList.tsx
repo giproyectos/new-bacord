@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
 import { formulaControlApi } from '@/api/formulaControl'
-import { mockOrdenes, mockRecetas } from '@/api/mock'
+import { ordenProcesoApi } from '@/api/ordenProceso'
+import { recetaMaestraApi } from '@/api/recetaMaestra'
 import type { FormulaControl } from '@/types'
 
 const ESTADO: Record<number, { label: string; bg: string; color: string }> = {
@@ -21,9 +22,11 @@ export function FormulaControlList() {
     queryKey: ['formulas-control'],
     queryFn: formulaControlApi.buscar,
   })
+  const { data: ordenes = [] } = useQuery({ queryKey: ['ordenes-proceso'], queryFn: () => ordenProcesoApi.buscar() })
+  const { data: recetas = [] } = useQuery({ queryKey: ['recetas-maestras'], queryFn: () => recetaMaestraApi.buscar() })
 
   const filtered = data.filter(fc => {
-    const op = mockOrdenes.find(o => o.idOrdenProceso === fc.idOrdenProceso)
+    const op = ordenes.find(o => o.idOrdenProceso === fc.idOrdenProceso)
     if (filtros.OrdenProceso && !op?.numeroOrdenProceso.toLowerCase().includes(filtros.OrdenProceso.toLowerCase())) return false
     if (filtros.IdEstado && fc.idEstado !== Number(filtros.IdEstado)) return false
     return true
@@ -41,7 +44,7 @@ export function FormulaControlList() {
     {
       key: 'idOrdenProceso', header: 'Orden de Proceso', width: '12%',
       render: r => {
-        const op = mockOrdenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
+        const op = ordenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
         return (
           <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: '#334155' }}>
             {op?.numeroOrdenProceso ?? `OP-${r.idOrdenProceso}`}
@@ -52,14 +55,14 @@ export function FormulaControlList() {
     {
       key: 'material', header: 'Material', width: '14%',
       render: r => {
-        const op = mockOrdenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
+        const op = ordenes.find(o => o.idOrdenProceso === r.idOrdenProceso)
         return <span style={{ fontSize: 12 }}>{op?.codigoMaterial ?? '—'}</span>
       },
     },
     {
       key: 'idRecetaMaestra', header: 'Receta Maestra', width: '12%',
       render: r => {
-        const rm = mockRecetas.find(rm => rm.idRecetaMaestra === r.idRecetaMaestra)
+        const rm = recetas.find(rm => rm.idRecetaMaestra === r.idRecetaMaestra)
         return rm
           ? <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: '#2D5D4A' }}>{rm.codigo}</span>
           : <span style={{ color: '#94A3B8', fontSize: 12 }}>—</span>

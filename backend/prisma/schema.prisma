@@ -1,0 +1,452 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Parametro {
+  id          Int      @id @default(autoincrement())
+  nombre      String   @unique
+  valor       String
+  descripcion String?
+}
+
+// ── Catálogos base ──────────────────────────────────────────────────────────
+
+model Centro {
+  id          Int      @id @default(autoincrement())
+  codigo      String   @unique
+  descripcion String
+  direccion   String?
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now())
+
+  usuarios       Usuario[]
+  recetas        RecetaMaestra[]
+  ordenes        OrdenProceso[]
+  formulasControl FormulaControl[]
+  batchRecords   BatchRecord[]
+}
+
+model Rol {
+  id             Int      @id @default(autoincrement())
+  nombre         String   @unique
+  descripcion    String?
+  modulos        String   @db.Text // CSV de claves de módulo con acceso de al menos lectura
+  /// CSV de claves de módulo (subconjunto de `modulos`) que además tienen permiso de edición.
+  modulosEdicion String?  @db.Text
+  activo         Boolean  @default(true)
+  creadoEn       DateTime @default(now())
+
+  usuarios Usuario[]
+}
+
+model GrupoResponsable {
+  id          Int      @id @default(autoincrement())
+  nombre      String   @unique
+  descripcion String?
+  colorKey    String   @default("slate")
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now())
+
+  usuarios UsuarioGrupo[]
+  firmas   Firma[]
+}
+
+model Usuario {
+  idUsuario            Int      @id @default(autoincrement())
+  numeroIdentificacion String   @unique
+  nombres              String
+  apellidos            String
+  login                String   @unique
+  email                String   @unique
+  /// Nulo mientras el usuario no ha completado la activación de su cuenta (definido su propia
+  /// contraseña por el enlace de invitación) — no puede iniciar sesión hasta entonces.
+  passwordHash         String?
+  activo               Boolean  @default(true)
+  esAdministrador      Boolean  @default(false)
+  bloqueado            Boolean  @default(false)
+  intentosFallidos     Int      @default(0)
+  idCentro             Int?
+  centro               Centro?  @relation(fields: [idCentro], references: [id])
+  idRol                Int?
+  rol                  Rol?     @relation(fields: [idRol], references: [id])
+  fechaCreacion        DateTime @default(now())
+  /// Fecha a partir de la cual la cuenta se desactiva automáticamente (nula = sin caducidad).
+  fechaCaducidad       DateTime?
+  /// Token de un solo uso para activar la cuenta o restablecer la contraseña por correo.
+  tokenActivacion      String?   @unique
+  tokenActivacionExpira DateTime?
+
+  grupos UsuarioGrupo[]
+
+  formulasControlCreadas FormulaControl[] @relation("FCCreador")
+  batchRecordsCreados    BatchRecord[]    @relation("BRCreador")
+  batchRecordsModificados BatchRecord[]   @relation("BRModificador")
+  batchRecordFirmas      BatchRecordFirma[]
+  batchRecordProcesoCierres BatchRecordProcesoCierre[]
+  liberaciones           BatchRecordLiberacion[]
+  desviacionesReportadas Desviacion[]     @relation("DesvReportadaPor")
+  desviacionesCerradas   Desviacion[]     @relation("DesvCerradaPor")
+  auditEntries           AuditEntry[]
+  carguesOP              CargueRegistro[]
+  carguesMaterial        CargueMaterialRegistro[]
+}
+
+model UsuarioGrupo {
+  idUsuario Int
+  idGrupo   Int
+  usuario   Usuario          @relation(fields: [idUsuario], references: [idUsuario], onDelete: Cascade)
+  grupo     GrupoResponsable @relation(fields: [idGrupo], references: [id], onDelete: Cascade)
+
+  @@id([idUsuario, idGrupo])
+}
+
+/// Jerarquía real: Producto Terminado y Semiterminado/Granel (con sus dos subtipos,
+/// Excipiente y Principio Activo) son los materiales que se transforman/fabrican; Material de
+/// Empaque (secundario: caja, estuche) y Material de Envase (primario: frasco, blíster) son
+/// insumos de empaque. Semiterminado/Granel en sí no es un valor asignable — todo material a
+/// granel es Excipiente o Principio Activo, así que solo existen esos dos como hojas; la
+/// UI los agrupa visualmente bajo "Semiterminado/Granel".
+enum TipoMaterial {
+  PRODUCTO_TERMINADO
+  MATERIAL_EMPAQUE
+  MATERIAL_ENVASE
+  EXCIPIENTE
+  PRINCIPIO_ACTIVO
+}
+
+model Material {
+  id          Int          @id @default(autoincrement())
+  codigo      String       @unique
+  descripcion String
+  tipo        TipoMaterial @default(PRODUCTO_TERMINADO)
+  activo      Boolean      @default(true)
+  creadoEn    DateTime     @default(now())
+
+  procesos Proceso[]
+  recetas  RecetaMaestra[]
+}
+
+/// Los procesos (etapas) están definidos por producto — el orden de fabricación de un material específico.
+model Proceso {
+  id          Int      @id @default(autoincrement())
+  idMaterial  Int
+  material    Material @relation(fields: [idMaterial], references: [id])
+  codigo      String
+  descripcion String
+  orden       Int      @default(1)
+  activo      Boolean  @default(true)
+
+  recetaProcesos RecetaProceso[]
+  brCierres      BatchRecordProcesoCierre[]
+
+  @@unique([idMaterial, codigo])
+}
+
+model Detalle {
+  id                Int      @id @default(autoincrement())
+  codigo            String   @unique
+  descripcion       String
+  estado            String   @default("En creación") // 'Activo' | 'En creación' | 'Obsoleto'
+  idEstrategiaFirma Int?
+  estrategiaFirma   EstrategiaFirma? @relation(fields: [idEstrategiaFirma], references: [id])
+  jsonSchema        String   @db.LongText
+  jsonData          String?  @db.LongText // datos de ejemplo/preview usados en el diseñador de formularios
+  jsonOptions       String?  @db.LongText
+  creadoEn          DateTime @default(now())
+  actualizadoEn     DateTime @updatedAt
+
+  recetaDetalles RecetaDetalle[]
+  brDatos        BatchRecordDetalleData[]
+  brFirmas       BatchRecordFirma[]
+  desviaciones   Desviacion[]
+}
+
+model Firma {
+  idFirma     Int      @id @default(autoincrement())
+  codigo      String   @unique
+  descripcion String
+  texto       String
+  activo      Boolean  @default(true)
+  idGrupo     Int
+  grupo       GrupoResponsable @relation(fields: [idGrupo], references: [id])
+
+  estrategiaItems EstrategiaFirmaItem[]
+  brFirmas        BatchRecordFirma[]
+}
+
+model EstrategiaFirma {
+  id                Int      @id @default(autoincrement())
+  codigo            String   @unique
+  descripcion       String
+  activo            Boolean  @default(true)
+  gruposDerogacion  String?  @db.Text // CSV de nombres de grupo
+  usuarioCreacion   String
+  fechaCreacion     DateTime @default(now())
+
+  firmas   EstrategiaFirmaItem[]
+  detalles Detalle[]
+}
+
+model EstrategiaFirmaItem {
+  id                Int    @id @default(autoincrement())
+  idEstrategiaFirma Int
+  estrategiaFirma   EstrategiaFirma @relation(fields: [idEstrategiaFirma], references: [id], onDelete: Cascade)
+  idFirma           Int
+  firma             Firma  @relation(fields: [idFirma], references: [idFirma])
+  texto             String
+  orden             Int
+  activo            Boolean @default(true)
+}
+
+// ── Receta Maestra ───────────────────────────────────────────────────────────
+
+model RecetaMaestra {
+  idRecetaMaestra     Int      @id @default(autoincrement())
+  codigo              String   @unique
+  descripcion         String
+  version             String
+  idCentro            Int
+  centro              Centro   @relation(fields: [idCentro], references: [id])
+  idEstado            Int      @default(1) // 1 Borrador, 2 Aprobada, 3 Obsoleta
+  idMaterial          Int
+  material            Material @relation(fields: [idMaterial], references: [id])
+  motivo              String?  @db.Text
+  usuarioCreacion     String
+  fechaCreacion       DateTime @default(now())
+  usuarioModificacion String
+  fechaModificacion   DateTime @updatedAt
+
+  procesos       RecetaProceso[]
+  ordenesProceso OrdenProceso[]
+  batchRecords   BatchRecord[]
+}
+
+model RecetaProceso {
+  id              Int      @id @default(autoincrement())
+  idRecetaMaestra Int
+  recetaMaestra   RecetaMaestra @relation(fields: [idRecetaMaestra], references: [idRecetaMaestra], onDelete: Cascade)
+  idProceso       Int
+  proceso         Proceso  @relation(fields: [idProceso], references: [id])
+  orden           Int
+
+  detalles RecetaDetalle[]
+}
+
+model RecetaDetalle {
+  id              Int      @id @default(autoincrement())
+  idRecetaProceso Int
+  recetaProceso   RecetaProceso @relation(fields: [idRecetaProceso], references: [id], onDelete: Cascade)
+  idDetalle       Int
+  detalle         Detalle  @relation(fields: [idDetalle], references: [id])
+  orden           Int
+}
+
+// ── Orden de Proceso ─────────────────────────────────────────────────────────
+
+model OrdenProceso {
+  idOrdenProceso      Int      @id @default(autoincrement())
+  idRecetaMaestra     Int
+  recetaMaestra       RecetaMaestra @relation(fields: [idRecetaMaestra], references: [idRecetaMaestra])
+  numeroOrdenProceso  String   @unique
+  codigoMaterial      String
+  descripcionMaterial String
+  idCentro            Int
+  centro              Centro   @relation(fields: [idCentro], references: [id])
+  loteLogistico       String
+  cantidadOrden       Float
+  unidadMedida        String
+  loteInspeccion      String
+  fechaFabricacion    DateTime
+  fechaCaducidad      DateTime
+  registroSanitario   String
+  formaFarmaceutica   String
+  idEstado            Int      @default(1) // 1 Pendiente, 2 En FC, 3 En BR
+
+  componentes     ComponenteOrden[]
+  formulasControl FormulaControl[]
+  batchRecords    BatchRecord[]
+}
+
+model ComponenteOrden {
+  idComponente                  Int      @id @default(autoincrement())
+  idOrdenProceso                Int
+  ordenProceso                  OrdenProceso @relation(fields: [idOrdenProceso], references: [idOrdenProceso], onDelete: Cascade)
+  codigoMaterialComponente      String
+  descripcionMaterialComponente String
+  cantidad                      Float
+  unidadMedida                  String
+  loteComponente                String
+  codigoListaMateriales         String
+}
+
+model CargueRegistro {
+  id                Int      @id @default(autoincrement())
+  archivo           String
+  fechaCargue       DateTime @default(now())
+  idUsuario         Int
+  usuario           Usuario  @relation(fields: [idUsuario], references: [idUsuario])
+  totalOrdenes      Int
+  totalComponentes  Int
+  errores           Int
+  estado            String // 'Exitoso' | 'Con errores' | 'Fallido'
+}
+
+model CargueMaterialRegistro {
+  id             Int      @id @default(autoincrement())
+  archivo        String
+  fechaCargue    DateTime @default(now())
+  idUsuario      Int
+  usuario        Usuario  @relation(fields: [idUsuario], references: [idUsuario])
+  totalMateriales Int
+  errores        Int
+  estado         String // 'Exitoso' | 'Con errores' | 'Fallido'
+}
+
+// ── Fórmula de Control ───────────────────────────────────────────────────────
+
+model FormulaControl {
+  idFormulaControl Int      @id @default(autoincrement())
+  idRecetaMaestra  Int
+  idOrdenProceso   Int
+  ordenProceso     OrdenProceso @relation(fields: [idOrdenProceso], references: [idOrdenProceso])
+  motivoEstado     String?  @db.Text
+  idEstado         Int      @default(1) // 1 Creada, 2 Enviada/Aprobada, 3 Cancelada
+  idCentro         Int
+  centro           Centro   @relation(fields: [idCentro], references: [id])
+  idUsuarioCreacion Int
+  usuarioCreacion  Usuario  @relation("FCCreador", fields: [idUsuarioCreacion], references: [idUsuario])
+  fechaCreacion    DateTime @default(now())
+
+  batchRecord BatchRecord?
+}
+
+// ── Batch Record ─────────────────────────────────────────────────────────────
+
+model BatchRecord {
+  idBatchRecord         Int      @id @default(autoincrement())
+  idFormulaControl      Int      @unique
+  formulaControl        FormulaControl @relation(fields: [idFormulaControl], references: [idFormulaControl])
+  idRecetaMaestra       Int
+  recetaMaestra         RecetaMaestra @relation(fields: [idRecetaMaestra], references: [idRecetaMaestra])
+  idOrdenProceso        Int
+  ordenProceso          OrdenProceso @relation(fields: [idOrdenProceso], references: [idOrdenProceso])
+  motivoEstado          String?  @db.Text
+  idEstado              Int      @default(1) // 1 En proceso, 2 Finalizado (firmas de cierre completas), 3 Cancelado, 4 Liberado
+  idCentro              Int
+  centro                Centro   @relation(fields: [idCentro], references: [id])
+  idUsuarioCreacion     Int
+  usuarioCreacion       Usuario  @relation("BRCreador", fields: [idUsuarioCreacion], references: [idUsuario])
+  fechaCreacion         DateTime @default(now())
+  idUsuarioModificacion Int
+  usuarioModificacion   Usuario  @relation("BRModificador", fields: [idUsuarioModificacion], references: [idUsuario])
+  fechaModificacion     DateTime @updatedAt
+  porcentajeAvance      Int      @default(0)
+
+  detalleDatos    BatchRecordDetalleData[]
+  firmas          BatchRecordFirma[]
+  procesosCierre  BatchRecordProcesoCierre[]
+  liberacion      BatchRecordLiberacion?
+  desviaciones    Desviacion[]
+}
+
+/// Respuestas del formulario Form.io de cada paso (detalle) del batch record.
+/// Reemplaza lo que hoy ni siquiera persiste en localStorage — solo vive en memoria del componente y se pierde al refrescar.
+model BatchRecordDetalleData {
+  id            Int      @id @default(autoincrement())
+  idBatchRecord Int
+  batchRecord   BatchRecord @relation(fields: [idBatchRecord], references: [idBatchRecord], onDelete: Cascade)
+  idDetalle     Int
+  detalle       Detalle  @relation(fields: [idDetalle], references: [id])
+  jsonData      String   @db.LongText
+  actualizadoEn DateTime @updatedAt
+
+  @@unique([idBatchRecord, idDetalle])
+}
+
+/// Cierre de una etapa/proceso completa del batch record (gating secuencial).
+/// Reemplaza la clave localStorage `br_cerrados_{id}` (Set de ids de proceso).
+model BatchRecordProcesoCierre {
+  id            Int      @id @default(autoincrement())
+  idBatchRecord Int
+  batchRecord   BatchRecord @relation(fields: [idBatchRecord], references: [idBatchRecord], onDelete: Cascade)
+  idProceso     Int
+  proceso       Proceso  @relation(fields: [idProceso], references: [id])
+  idUsuario     Int
+  usuario       Usuario  @relation(fields: [idUsuario], references: [idUsuario])
+  cerradoEn     DateTime @default(now())
+
+  @@unique([idBatchRecord, idProceso])
+}
+
+/// Firma electrónica capturada para un (detalle, firma) dentro de un batch record.
+/// Reemplaza la clave localStorage `br_firmados_{id}`.
+model BatchRecordFirma {
+  id            Int      @id @default(autoincrement())
+  idBatchRecord Int
+  batchRecord   BatchRecord @relation(fields: [idBatchRecord], references: [idBatchRecord], onDelete: Cascade)
+  idDetalle     Int
+  detalle       Detalle  @relation(fields: [idDetalle], references: [id])
+  /// "" = firma de cierre del detalle completo; si no, el `key` del componente firma-seccion
+  /// dentro del schema Form.io donde se capturó (un detalle puede tener varios bloques de firma).
+  bloqueKey     String   @default("")
+  idFirma       Int
+  firma         Firma    @relation(fields: [idFirma], references: [idFirma])
+  idUsuario     Int
+  usuario       Usuario  @relation(fields: [idUsuario], references: [idUsuario])
+  firmadoEn     DateTime @default(now())
+
+  @@unique([idBatchRecord, idDetalle, bloqueKey, idFirma])
+}
+
+/// Liberación final del lote. Reemplaza la clave localStorage `br_liberado_{id}`.
+model BatchRecordLiberacion {
+  idBatchRecord Int      @id
+  batchRecord   BatchRecord @relation(fields: [idBatchRecord], references: [idBatchRecord], onDelete: Cascade)
+  idUsuario     Int
+  usuario       Usuario  @relation(fields: [idUsuario], references: [idUsuario])
+  observacion   String?  @db.Text
+  liberadoEn    DateTime @default(now())
+}
+
+model Desviacion {
+  id                Int      @id @default(autoincrement())
+  idBatchRecord     Int
+  batchRecord       BatchRecord @relation(fields: [idBatchRecord], references: [idBatchRecord], onDelete: Cascade)
+  idDetalle         Int
+  detalle           Detalle  @relation(fields: [idDetalle], references: [id])
+  campo             String
+  labelCampo        String
+  valorIngresado    String
+  limiteInfo        String
+  descripcion       String   @db.Text
+  estado            String   @default("abierta") // 'abierta' | 'cerrada'
+  idUsuarioReporta  Int
+  usuarioReporta    Usuario  @relation("DesvReportadaPor", fields: [idUsuarioReporta], references: [idUsuario])
+  fechaHora         DateTime @default(now())
+  observacionCierre String?  @db.Text
+  fechaCierre       DateTime?
+  idUsuarioCierre   Int?
+  usuarioCierra     Usuario? @relation("DesvCerradaPor", fields: [idUsuarioCierre], references: [idUsuario])
+}
+
+model AuditEntry {
+  id                  String   @id @default(uuid())
+  timestamp           DateTime @default(now())
+  idUsuario           Int?
+  usuario             Usuario? @relation(fields: [idUsuario], references: [idUsuario])
+  nombreUsuario       String
+  loginUsuario        String
+  cargo               String
+  entidad             String
+  idEntidad           String
+  descripcionEntidad  String
+  accion              String
+  modulo              String
+  cambios             String?  @db.LongText // JSON serializado de AuditCambio[]
+  motivo              String?  @db.Text
+}

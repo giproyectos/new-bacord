@@ -1,7 +1,6 @@
-import { useAuditStore } from '@/stores/auditStore'
 import { useAuthStore } from '@/stores/authStore'
+import { auditoriaApi } from '@/api/auditoria'
 import type { AuditAccion, AuditEntidad, AuditCambio } from '@/types/audit'
-import { randomUUID } from '@/utils/uuid'
 
 const CARGO_MAP: Record<string, string> = {
   'Producción':      'Operario de Producción',
@@ -19,7 +18,6 @@ export interface FirmanteAudit {
 }
 
 export function useAudit() {
-  const add = useAuditStore(s => s.add)
   const user = useAuthStore(s => s.user)
 
   const registrar = (params: {
@@ -49,11 +47,8 @@ export function useAudit() {
       cargo: 'Sin sesión activa',
     })
 
-    add({
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...actor,
-      ...rest,
+    void auditoriaApi.registrar({ ...rest, firmante: actor }).catch((err) => {
+      console.error('No se pudo registrar el evento de auditoría', err)
     })
   }
 

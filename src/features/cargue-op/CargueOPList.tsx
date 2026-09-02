@@ -1,9 +1,24 @@
 import { useState, useCallback, useEffect } from 'react'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
-import { mockRecetas, mockMateriales } from '@/api/mock'
 import { ordenProcesoApi } from '@/api/ordenProceso'
+import { recetaMaestraApi } from '@/api/recetaMaestra'
+import { materialesApi, type Material } from '@/api/materiales'
+import { centrosApi, type Centro } from '@/api/centros'
+import { usePuedeEditar } from '@/hooks/usePermisos'
+import { downloadTextFile } from '@/utils/downloadFile'
 import type { RecetaMaestra, CargueRegistro, OrdenProceso, ComponenteOrden } from '@/types'
+
+// El parser identifica cada fila por su número de campos (>=9 = CABECERA, 4-8 = DETALLE) y no
+// se salta ninguna línea de encabezado — por eso la plantilla trae datos de ejemplo listos para
+// reemplazar, no una fila de encabezado con nombres de columna (esa se leería como datos inválidos).
+const PLANTILLA_OP = [
+  'OP-00001,PT-0001,Tableta Analgésico 500mg,Planta Principal,LOTE0001,10000,UND,LI-0001,01/15/2026,01/15/2028,RS-12345,Tableta',
+  'OP-00001,API-0001,Paracetamol USP,500,KG,LC-0001,LM-0001',
+  'OP-00001,EXC-0001,Lactosa monohidratada,120,KG,LC-0002,LM-0002',
+  'OP-00002,PT-0002,Jarabe Tos 120ml,Planta Principal,LOTE0002,5000,UND,LI-0002,02/01/2026,02/01/2028,RS-54321,Jarabe',
+  'OP-00002,API-0002,Dextrometorfano,25,KG,LC-0003,LM-0003',
+].join('\r\n')
 
 // ── Internal parsed types ─────────────────────────────────────────────────────
 interface ParsedComponente extends Omit<ComponenteOrden, 'idComponente' | 'idOrdenProceso'> {
@@ -63,7 +78,7 @@ function splitCSVLine(line: string): string[] {
 }
 
 // ── Core parser (takes pre-split rows) ───────────────────────────────────────
-function parsearFilas(filas: string[][]): ParseResult {
+function parsearFilas(filas: string[][], materiales: Material[], recetas: RecetaMaestra[]): ParseResult {
   const cabeceraMap: Record<string, ParsedOP> = {}
   const invalidas: { rowNum: number; mensaje: string }[] = []
 
@@ -127,9 +142,9 @@ function parsearFilas(filas: string[][]): ParseResult {
 
   // Match with RecetaMaestra by material code
   for (const op of Object.values(cabeceraMap)) {
-    const mat = mockMateriales.find(m => m.codigo === op.codigoMaterial)
+    const mat = materiales.find(m => m.codigo === op.codigoMaterial)
     if (mat) {
-      op.recetaMatch = mockRecetas.find(r =>
+      op.recetaMatch = recetas.find(r =>
         r.idMateriales.split(',').map(s => s.trim()).includes(String(mat.id))
       ) ?? null
     }
@@ -139,16 +154,16 @@ function parsearFilas(filas: string[][]): ParseResult {
 }
 
 // ── CSV parser ────────────────────────────────────────────────────────────────
-function parsearCSV(text: string): ParseResult {
+function parsearCSV(text: string, materiales: Material[], recetas: RecetaMaestra[]): ParseResult {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0)
-  return parsearFilas(lines.map(splitCSVLine))
+  return parsearFilas(lines.map(splitCSVLine), materiales, recetas)
 }
 
 // ── XLSX parser — first cell must be a code (no spaces, alphanumeric+hyphens) ──
 const isDataCode = (v: unknown): boolean =>
   typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.trim())
 
-async function parsearXLSX(data: ArrayBuffer): Promise<ParseResult> {
+async function parsearXLSX(data: ArrayBuffer, materiales: Material[], recetas: RecetaMaestra[]): Promise<ParseResult> {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(data, { type: 'array', cellDates: true })
   const sheetName = wb.SheetNames.includes('Cargue_Ordenes') ? 'Cargue_Ordenes' : wb.SheetNames[0]
@@ -169,7 +184,7 @@ async function parsearXLSX(data: ArrayBuffer): Promise<ParseResult> {
       })
     )
 
-  return parsearFilas(filas)
+  return parsearFilas(filas, materiales, recetas)
 }
 
 // ── Historial columns ─────────────────────────────────────────────────────────
@@ -206,15 +221,22 @@ const histCols: Column<CargueRegistro>[] = [
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export function CargueOPList() {
+  const puedeEditar = usePuedeEditar('ordenes-proceso')
   const [step, setStep] = useState<'idle' | 'preview' | 'saving' | 'done'>('idle')
   const [file, setFile] = useState<File | null>(null)
   const [parsed, setParsed] = useState<ParseResult | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [dragOver, setDragOver] = useState(false)
   const [historial, setHistorial] = useState<CargueRegistro[]>([])
+  const [materiales, setMateriales] = useState<Material[]>([])
+  const [recetas, setRecetas] = useState<RecetaMaestra[]>([])
+  const [centros, setCentros] = useState<Centro[]>([])
 
   useEffect(() => {
     ordenProcesoApi.buscarCargues().then(setHistorial)
+    materialesApi.listar().then(setMateriales)
+    recetaMaestraApi.buscar().then(setRecetas)
+    centrosApi.listar().then(setCentros)
   }, [])
 
   const procesar = useCallback(async (f: File) => {
@@ -223,15 +245,15 @@ export function CargueOPList() {
     try {
       if (ext === 'xlsx' || ext === 'xls') {
         const buf = await f.arrayBuffer()
-        setParsed(await parsearXLSX(buf))
+        setParsed(await parsearXLSX(buf, materiales, recetas))
       } else {
-        setParsed(parsearCSV(await f.text()))
+        setParsed(parsearCSV(await f.text(), materiales, recetas))
       }
       setStep('preview')
     } catch (err) {
       console.error('Error procesando archivo:', err)
     }
-  }, [])
+  }, [materiales, recetas])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false)
@@ -251,6 +273,10 @@ export function CargueOPList() {
     setStep('idle'); setFile(null); setParsed(null); setExpanded(new Set())
   }
 
+  const resolverCentro = (nombre: string): number =>
+    centros.find(c => c.descripcion.toLowerCase() === nombre?.trim().toLowerCase())?.id
+      ?? centros[0]?.id ?? 0
+
   const confirmar = async () => {
     if (!parsed || !file) return
     setStep('saving')
@@ -260,7 +286,7 @@ export function CargueOPList() {
       numeroOrdenProceso: op.numeroOrdenProceso,
       codigoMaterial: op.codigoMaterial,
       descripcionMaterial: op.descripcionMaterial,
-      idCentro: 1, centro: op.centro,
+      idCentro: resolverCentro(op.centro), centro: op.centro,
       loteLogistico: op.loteLogistico,
       cantidadOrden: op.cantidadOrden,
       unidadMedida: op.unidadMedida,
@@ -282,21 +308,10 @@ export function CargueOPList() {
         codigoListaMateriales: c.codigoListaMateriales,
       })))
 
-    const res = await ordenProcesoApi.confirmarCargue(ordenesPayload, compPayload)
+    const res = await ordenProcesoApi.confirmarCargue(file.name, ordenesPayload, compPayload)
 
     if (res.estado) {
-      const totalErrors = parsed.invalidas.length + parsed.ordenes.filter(o => o.errors.length > 0).length
-      const nuevoRegistro: CargueRegistro = {
-        id: Date.now(),
-        archivo: file.name,
-        fechaCargue: new Date().toISOString().split('T')[0],
-        usuario: 'admin',
-        totalOrdenes: parsed.ordenes.length,
-        totalComponentes: res.datos?.totalComponentes ?? 0,
-        errores: totalErrors,
-        estado: totalErrors === 0 ? 'Exitoso' : 'Con errores',
-      }
-      setHistorial(h => [nuevoRegistro, ...h])
+      ordenProcesoApi.buscarCargues().then(setHistorial)
     }
     setStep('done')
   }
@@ -398,6 +413,14 @@ export function CargueOPList() {
               onChange={e => { const f = e.target.files?.[0]; if (f) procesar(f) }}
             />
           </label>
+        )}
+        {step === 'idle' && (
+          <div style={{ textAlign: 'center', marginTop: 14 }}>
+            <button className="btn btn-gray" style={{ fontSize: 12.5 }}
+              onClick={() => downloadTextFile('plantilla-ordenes-proceso.csv', PLANTILLA_OP)}>
+              <i className="fa fa-download" /> Descargar plantilla de ejemplo
+            </button>
+          </div>
         )}
 
         {/* ── SAVING: spinner ── */}
@@ -618,9 +641,9 @@ export function CargueOPList() {
               </button>
               <button
                 className="btn btn-primary"
-                disabled={totalValidErrors > 0}
+                disabled={totalValidErrors > 0 || !puedeEditar}
                 onClick={confirmar}
-                title={totalValidErrors > 0 ? 'Corrija los errores para habilitar el cargue' : ''}
+                title={!puedeEditar ? 'No tiene permiso de edición en Órdenes de Proceso' : totalValidErrors > 0 ? 'Corrija los errores para habilitar el cargue' : ''}
               >
                 <i className="fa fa-check" /> Confirmar cargue — {parsed.ordenes.length} orden{parsed.ordenes.length !== 1 ? 'es' : ''}
               </button>

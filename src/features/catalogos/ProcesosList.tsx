@@ -1,34 +1,28 @@
-import { useState } from 'react'
-import { mockMateriales, mockProcesosGlobal, type ProcesoItem as Proceso } from '@/api/mock'
-
-let mockProcesos = mockProcesosGlobal
+import { useEffect, useState } from 'react'
+import { procesosApi, type ProcesoItem as Proceso } from '@/api/procesos'
+import { materialesApi, type Material } from '@/api/materiales'
+import { usePuedeEditar } from '@/hooks/usePermisos'
 
 const EMPTY_FORM = { codigo: '', descripcion: '', idMaterial: '' }
 
-function reorder(list: Proceso[], id: number, dir: -1 | 1): Proceso[] {
-  const sorted = [...list].sort((a, b) => a.orden - b.orden)
-  const idx = sorted.findIndex(p => p.id === id)
-  const target = idx + dir
-  if (target < 0 || target >= sorted.length) return list
-  const a = sorted[idx].orden
-  const b = sorted[target].orden
-  sorted[idx].orden = b
-  sorted[target].orden = a
-  return sorted
-}
-
 export function ProcesosList() {
-  const [procesos, setProcesos] = useState<Proceso[]>([...mockProcesos])
-  const [openIds, setOpenIds]   = useState<Set<number>>(() => {
-    const ids = new Set<number>()
-    mockProcesos.forEach(p => ids.add(p.idMaterial))
-    return ids
-  })
+  const puedeEditar = usePuedeEditar('procesos')
+  const [materiales, setMateriales] = useState<Material[]>([])
+  const [procesos, setProcesos] = useState<Proceso[]>([])
+  const [loading, setLoading] = useState(true)
+  const [openIds, setOpenIds]   = useState<Set<number>>(new Set())
   const [modal, setModal]   = useState<{ mode: 'crear' | 'editar'; item?: Proceso; presetMat?: number } | null>(null)
   const [form, setForm]     = useState(EMPTY_FORM)
   const [warn, setWarn]     = useState<Proceso | null>(null)
   const [err, setErr]       = useState('')
   const [search, setSearch] = useState('')
+
+  const cargar = () => Promise.all([materialesApi.listar(), procesosApi.listar()]).then(([mats, procs]) => {
+    setMateriales(mats)
+    setProcesos(procs)
+    setOpenIds(prev => prev.size > 0 ? prev : new Set(procs.map(p => p.idMaterial)))
+  }).finally(() => setLoading(false))
+  useEffect(() => { cargar() }, [])
 
   const toggleOpen = (id: number) =>
     setOpenIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -42,55 +36,50 @@ export function ProcesosList() {
     setErr(''); setModal({ mode: 'editar', item: p })
   }
 
-  const guardar = () => {
+  const guardar = async () => {
     if (!form.idMaterial)        { setErr('Seleccione un producto'); return }
     if (!form.codigo.trim())     { setErr('El código es requerido'); return }
     if (!form.descripcion.trim()){ setErr('La descripción es requerida'); return }
 
-    const idMat = Number(form.idMaterial)
+    const idMaterial = Number(form.idMaterial)
     if (modal?.mode === 'crear') {
-      const maxOrden = Math.max(0, ...procesos.filter(p => p.idMaterial === idMat).map(p => p.orden))
-      const nuevo: Proceso = {
-        id: Math.max(0, ...procesos.map(p => p.id)) + 1,
-        idMaterial: idMat,
-        codigo: form.codigo.trim().toUpperCase(),
-        descripcion: form.descripcion.trim(),
-        orden: maxOrden + 1,
-      }
-      setProcesos(ps => [...ps, nuevo])
-      mockProcesos.push(nuevo)
-      setOpenIds(s => new Set(s).add(idMat))
+      const maxOrden = Math.max(0, ...procesos.filter(p => p.idMaterial === idMaterial).map(p => p.orden))
+      const res = await procesosApi.crear({ idMaterial, codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), orden: maxOrden + 1 })
+      if (!res.estado) { setErr(res.mensaje); return }
+      setOpenIds(s => new Set(s).add(idMaterial))
     } else if (modal?.item) {
-      const upd = { ...modal.item, codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), idMaterial: idMat }
-      setProcesos(ps => ps.map(p => p.id === upd.id ? upd : p))
-      const i = mockProcesos.findIndex(p => p.id === upd.id)
-      if (i !== -1) mockProcesos[i] = upd
+      const res = await procesosApi.actualizar(modal.item.id, { codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), idMaterial })
+      if (!res.estado) { setErr(res.mensaje); return }
     }
     setModal(null)
+    cargar()
   }
 
-  const eliminar = (p: Proceso) => {
-    setProcesos(ps => ps.filter(x => x.id !== p.id))
-    mockProcesos = mockProcesos.filter(x => x.id !== p.id)
+  const eliminar = async (p: Proceso) => {
+    await procesosApi.eliminar(p.id)
     setWarn(null)
+    cargar()
   }
 
-  const mover = (id: number, dir: -1 | 1, idMat: number) => {
-    const lista = procesos.filter(p => p.idMaterial === idMat)
-    const reordenada = reorder(lista, id, dir)
-    setProcesos(ps => {
-      const otros = ps.filter(p => p.idMaterial !== idMat)
-      return [...otros, ...reordenada]
-    })
-    const otros = mockProcesos.filter(p => p.idMaterial !== idMat)
-    mockProcesos = [...otros, ...reorder(mockProcesos.filter(p => p.idMaterial === idMat), id, dir)]
+  const mover = async (id: number, dir: -1 | 1, idMaterial: number) => {
+    const lista = procesos.filter(p => p.idMaterial === idMaterial).sort((a, b) => a.orden - b.orden)
+    const idx = lista.findIndex(p => p.id === id)
+    const target = idx + dir
+    if (target < 0 || target >= lista.length) return
+    await Promise.all([
+      procesosApi.actualizar(lista[idx].id, { orden: lista[target].orden }),
+      procesosApi.actualizar(lista[target].id, { orden: lista[idx].orden }),
+    ])
+    cargar()
   }
 
   const q = search.toLowerCase()
-  const materialesFiltrados = mockMateriales.filter(m =>
+  const materialesFiltrados = materiales.filter(m =>
     !q || m.descripcion.toLowerCase().includes(q) || m.codigo.toLowerCase().includes(q) ||
     procesos.some(p => p.idMaterial === m.id && (p.descripcion.toLowerCase().includes(q) || p.codigo.toLowerCase().includes(q)))
   )
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}><i className="fa fa-spinner fa-spin" /></div>
 
   return (
     <>
@@ -170,11 +159,20 @@ export function ProcesosList() {
               onBlur={e => { (e.target as HTMLInputElement).style.borderColor = 'var(--hair-2)' }}
             />
           </div>
-          <button className="btn btn-primary" onClick={() => openCrear()}>
-            <i className="fa fa-plus" /> Nuevo proceso
-          </button>
+          {puedeEditar && (
+            <button className="btn btn-primary" onClick={() => openCrear()}>
+              <i className="fa fa-plus" /> Nuevo proceso
+            </button>
+          )}
         </div>
       </div>
+
+      {materiales.length === 0 && (
+        <div style={{ padding:'48px 20px', textAlign:'center', color:'var(--ink-4)' }}>
+          <i className="fa fa-pills" style={{ fontSize:28, display:'block', marginBottom:10, color:'var(--hair-2)' }} />
+          <span style={{ fontSize:13 }}>Primero crea materiales en el catálogo de Materiales — los procesos se definen por producto.</span>
+        </div>
+      )}
 
       {/* Acordeón por material */}
       {materialesFiltrados.map(mat => {
@@ -185,7 +183,6 @@ export function ProcesosList() {
 
         return (
           <div key={mat.id} className="pr-section">
-            {/* Header del acordeón */}
             <div
               className={`pr-section-hdr${isOpen ? ' open' : ''}`}
               onClick={() => toggleOpen(mat.id)}
@@ -199,21 +196,25 @@ export function ProcesosList() {
               <span className="pr-count">
                 {pasos.length > 0 ? `${pasos.length} paso${pasos.length !== 1 ? 's' : ''}` : 'Sin pasos'}
               </span>
-              <button
-                className="pr-add-btn"
-                onClick={e => { e.stopPropagation(); openCrear(mat.id) }}
-              >
-                <i className="fa fa-plus" /> Agregar paso
-              </button>
+              {puedeEditar && (
+                <button
+                  className="pr-add-btn"
+                  onClick={e => { e.stopPropagation(); openCrear(mat.id) }}
+                >
+                  <i className="fa fa-plus" /> Agregar paso
+                </button>
+              )}
             </div>
 
-            {/* Filas de procesos */}
             {isOpen && (
               <div className="pr-rows">
                 {pasos.length === 0 ? (
                   <div className="pr-empty">
                     <i className="fa fa-info-circle" />
-                    <span>No hay pasos definidos para este producto. <button style={{ background:'none', border:'none', cursor:'pointer', color:'var(--navy)', fontWeight:600, padding:0 }} onClick={() => openCrear(mat.id)}>Agregar el primero</button></span>
+                    <span>
+                      No hay pasos definidos para este producto.
+                      {puedeEditar && <> <button style={{ background:'none', border:'none', cursor:'pointer', color:'var(--navy)', fontWeight:600, padding:0 }} onClick={() => openCrear(mat.id)}>Agregar el primero</button></>}
+                    </span>
                   </div>
                 ) : (
                   pasos.map((p, idx) => (
@@ -221,20 +222,22 @@ export function ProcesosList() {
                       <span className="pr-num">{p.orden}</span>
                       <span className="pr-code">{p.codigo}</span>
                       <span className="pr-desc">{p.descripcion}</span>
-                      <div className="pr-acts">
-                        <button className="pr-ab" title="Subir" disabled={idx === 0} onClick={() => mover(p.id, -1, mat.id)}>
-                          <i className="fa fa-chevron-up" />
-                        </button>
-                        <button className="pr-ab" title="Bajar" disabled={idx === pasos.length - 1} onClick={() => mover(p.id, 1, mat.id)}>
-                          <i className="fa fa-chevron-down" />
-                        </button>
-                        <button className="pr-ab edit" title="Editar" onClick={() => openEditar(p)}>
-                          <i className="fa fa-pencil-alt" />
-                        </button>
-                        <button className="pr-ab del" title="Eliminar" onClick={() => setWarn(p)}>
-                          <i className="fa fa-trash-alt" />
-                        </button>
-                      </div>
+                      {puedeEditar && (
+                        <div className="pr-acts">
+                          <button className="pr-ab" title="Subir" disabled={idx === 0} onClick={() => mover(p.id, -1, mat.id)}>
+                            <i className="fa fa-chevron-up" />
+                          </button>
+                          <button className="pr-ab" title="Bajar" disabled={idx === pasos.length - 1} onClick={() => mover(p.id, 1, mat.id)}>
+                            <i className="fa fa-chevron-down" />
+                          </button>
+                          <button className="pr-ab edit" title="Editar" onClick={() => openEditar(p)}>
+                            <i className="fa fa-pencil-alt" />
+                          </button>
+                          <button className="pr-ab del" title="Eliminar" onClick={() => setWarn(p)}>
+                            <i className="fa fa-trash-alt" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -244,7 +247,7 @@ export function ProcesosList() {
         )
       })}
 
-      {materialesFiltrados.length === 0 && (
+      {materiales.length > 0 && materialesFiltrados.length === 0 && (
         <div style={{ padding:'48px 20px', textAlign:'center', color:'var(--ink-4)' }}>
           <i className="fa fa-search" style={{ fontSize:28, display:'block', marginBottom:10, color:'var(--hair-2)' }} />
           <span style={{ fontSize:13 }}>No se encontraron productos que coincidan con "{search}"</span>
@@ -263,7 +266,7 @@ export function ProcesosList() {
                   {modal.mode === 'editar'
                     ? `Editando: ${modal.item?.codigo}`
                     : modal.presetMat
-                      ? `Para: ${mockMateriales.find(m => m.id === modal.presetMat)?.descripcion}`
+                      ? `Para: ${materiales.find(m => m.id === modal.presetMat)?.descripcion}`
                       : 'Seleccione el producto y complete los datos'}
                 </div>
               </div>
@@ -275,7 +278,7 @@ export function ProcesosList() {
                 <label>Producto <span style={{ color:'var(--orange)' }}>*</span></label>
                 <select value={form.idMaterial} onChange={e => { setForm(v => ({ ...v, idMaterial: e.target.value })); setErr('') }}>
                   <option value="">— Seleccione un producto —</option>
-                  {mockMateriales.map(m => (
+                  {materiales.map(m => (
                     <option key={m.id} value={String(m.id)}>{m.descripcion} ({m.codigo})</option>
                   ))}
                 </select>

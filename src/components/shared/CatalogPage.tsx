@@ -17,6 +17,8 @@ interface Props<T> {
   loading?: boolean
   fields: Field[]
   canCreate?: boolean
+  /** false esconde los botones de editar/eliminar por fila (para usuarios con permiso de solo lectura). */
+  canEdit?: boolean
   onSave?: (values: Record<string, string>, isEdit: boolean) => void
   onDelete?: (row: T) => void
   extraActions?: (row: T) => React.ReactNode
@@ -27,7 +29,7 @@ interface Props<T> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function CatalogPage<T = any>({
   panelTitle, columns, data, loading, fields,
-  canCreate = true, onSave, onDelete, extraActions,
+  canCreate = true, canEdit = true, onSave, onDelete, extraActions,
   icon = 'fa-list-alt', description,
 }: Props<T>) {
   type ModalMode = 'create' | 'edit' | 'delete' | null
@@ -98,12 +100,16 @@ export function CatalogPage<T = any>({
       key: '__acc', header: '', width: '6%', align: 'center',
       render: row => (
         <div className="dt-act">
-          <button className="dt-ab dt-ab-edit" title="Editar" onClick={() => openEdit(row)}>
-            <i className="fa fa-pencil-alt" />
-          </button>
-          <button className="dt-ab dt-ab-del" title="Eliminar" onClick={() => openDelete(row)}>
-            <i className="fa fa-trash-alt" />
-          </button>
+          {canEdit && (
+            <>
+              <button className="dt-ab dt-ab-edit" title="Editar" onClick={() => openEdit(row)}>
+                <i className="fa fa-pencil-alt" />
+              </button>
+              <button className="dt-ab dt-ab-del" title="Eliminar" onClick={() => openDelete(row)}>
+                <i className="fa fa-trash-alt" />
+              </button>
+            </>
+          )}
           {extraActions?.(row)}
         </div>
       ),
