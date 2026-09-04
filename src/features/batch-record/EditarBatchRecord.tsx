@@ -437,7 +437,7 @@ function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDa
   useEffect(() => {
     if (locked && !lockedRef.current) {
       lockedRef.current = true
-      ref.current?.contentWindow?.postMessage({ type: 'LOCK_FORM' }, '*')
+      ref.current?.contentWindow?.postMessage({ type: 'LOCK_FORM' }, window.location.origin)
     }
     if (!locked) {
       lockedRef.current = false
@@ -458,9 +458,9 @@ function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDa
           data: JSON.stringify({ data }),
           lockedKeys: lockedKeys ?? [],
           language,
-        }, '*')
+        }, window.location.origin)
       } else {
-        frame.contentWindow?.postMessage({ type: 'RENDER_JSON', value: schema, language }, '*')
+        frame.contentWindow?.postMessage({ type: 'RENDER_JSON', value: schema, language }, window.location.origin)
       }
     }
 

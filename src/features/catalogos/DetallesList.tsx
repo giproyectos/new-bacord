@@ -2248,6 +2248,9 @@ function FormularioPanel({ detalle, onClose, onSave }: {
 
   useEffect(() => {
     const handler = (ev: MessageEvent) => {
+      // Only accept messages from the preview iframe itself — not from any other window that
+      // might post a same-shaped message (e.g. a compromised third-party script on the page).
+      if (ev.source !== renderRef.current?.contentWindow) return
       if (ev.data?.type === 'HEIGTH') {
         const h = parseInt(ev.data.value); if (!isNaN(h) && h > 80) setRenderH(h + 32)
       }
@@ -2260,7 +2263,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
         setPreviewFailed(false)
         if (previewTimeoutRef.current) { clearTimeout(previewTimeoutRef.current); previewTimeoutRef.current = null }
         if (pendingPreviewRef.current !== null) {
-          renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: pendingPreviewRef.current, language: langFor() }, '*')
+          renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: pendingPreviewRef.current, language: langFor() }, window.location.origin)
           pendingPreviewRef.current = null
         }
       }
@@ -2277,7 +2280,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
     const next = f ?? firmadosPreview
     const json = injectMaterialesEnPreview(toFormio(compsRef.current, next))
     if (previewReadyRef.current) {
-      renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: json, language: langFor() }, '*')
+      renderRef.current?.contentWindow?.postMessage({ type: 'RENDER_JSON', value: json, language: langFor() }, window.location.origin)
     } else {
       pendingPreviewRef.current = json
     }

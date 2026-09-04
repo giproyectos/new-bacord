@@ -25,6 +25,9 @@
   <script>
     window.onload = function () {
       var currentForm = null;
+      // See render.html for why this is never '*': this page is always same-origin with the
+      // app that embeds it.
+      var PARENT_ORIGIN = window.location.origin;
 
       function getMenu() {
         var componentsToHide = [
@@ -192,7 +195,7 @@
           form.on('change', function () {
             var jsonSchema = JSON.stringify(form.schema, null, 4);
             document.getElementById('jsonSchema').value = jsonSchema;
-            window.top.postMessage({ type: 'RENDER_JSON', value: jsonSchema }, '*');
+            window.top.postMessage({ type: 'RENDER_JSON', value: jsonSchema }, PARENT_ORIGIN);
           });
         });
       }
@@ -201,6 +204,7 @@
       initBuilder({});
 
       window.addEventListener('message', function (e) {
+        if (e.source !== window.parent) return;
         if (e.data.type === 'INIT_BUILDER') {
           var schema = {};
           if (e.data.value && e.data.value !== '' && e.data.value !== '{}') {
@@ -209,7 +213,7 @@
           initBuilder(schema);
         }
         if (e.data.type === 'REQUEST_JSON') {
-          window.top.postMessage({ type: 'RESPONSE_JSON', value: document.getElementById('jsonSchema').value }, '*');
+          window.top.postMessage({ type: 'RESPONSE_JSON', value: document.getElementById('jsonSchema').value }, PARENT_ORIGIN);
         }
       });
     };
