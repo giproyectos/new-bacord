@@ -5,7 +5,9 @@ import { requireAdmin } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { NotFoundError, ValidationError } from '../utils/errors.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
+import { enviarAccesoOidc } from '../services/email.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
+import * as oidc from '../services/oidc.js'
 
 export const usuariosRouter = Router()
 
@@ -29,7 +31,9 @@ function toDto(u: Awaited<ReturnType<typeof findAll>>[number]) {
   const { passwordHash, ...rest } = u
   return {
     ...rest,
-    activacionPendiente: passwordHash === null,
+    // Con OIDC habilitado la cuenta nunca tiene contraseña propia por diseño — "pendiente de
+    // activación" solo describe algo real en un despliegue de acceso local.
+    activacionPendiente: passwordHash === null && !oidc.isOidcConfigured(),
     rolNombre: u.rol?.nombre ?? '',
     grupos: u.grupos.map((g) => g.grupo.nombre).join(','),
     idGrupos: u.grupos.map((g) => g.grupo.id).join(','),
@@ -94,9 +98,16 @@ usuariosRouter.post(
       })
       return creado
     })
-    // La cuenta queda sin contraseña hasta que el usuario la defina desde el enlace de invitación.
-    await generarYEnviarInvitacion(usuario.idUsuario, usuario.email, usuario.nombres, false)
-    res.status(201).json({ estado: true, mensaje: 'Usuario creado — se envió un correo de invitación', datos: toDto(usuario) })
+    if (oidc.isOidcConfigured()) {
+      // Con OIDC, la identidad la confirma el proveedor de la organización — no hay
+      // contraseña propia que definir, solo se avisa del acceso.
+      await enviarAccesoOidc(usuario.email, usuario.nombres)
+      res.status(201).json({ estado: true, mensaje: 'Usuario creado — se le avisó que ya tiene acceso', datos: toDto(usuario) })
+    } else {
+      // La cuenta queda sin contraseña hasta que el usuario la defina desde el enlace de invitación.
+      await generarYEnviarInvitacion(usuario.idUsuario, usuario.email, usuario.nombres, false)
+      res.status(201).json({ estado: true, mensaje: 'Usuario creado — se envió un correo de invitación', datos: toDto(usuario) })
+    }
   })
 )
 

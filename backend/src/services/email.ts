@@ -51,6 +51,20 @@ export async function enviarInvitacionCuenta(to: string, nombre: string, link: s
   )
 }
 
+/** Cuenta creada en un despliegue con OIDC habilitado: no hay contraseña que definir — la
+ * identidad la confirma el proveedor de la organización, así que solo se avisa del acceso. */
+export async function enviarAccesoOidc(to: string, nombre: string) {
+  const loginUrl = `${process.env.CORS_ORIGIN ?? 'http://localhost:5173'}/login`
+  await enviarCorreo(
+    to,
+    'Ya tienes acceso a BACord',
+    `<p>Hola ${nombre},</p>
+     <p>Se te concedió acceso a BACord. Ingresa con tu cuenta corporativa habitual desde la pantalla de inicio de sesión — no necesitas definir una contraseña nueva.</p>
+     <p><a href="${loginUrl}">${loginUrl}</a></p>`,
+    loginUrl
+  )
+}
+
 export async function enviarRestablecerContrasena(to: string, nombre: string, link: string) {
   await enviarCorreo(
     to,

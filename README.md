@@ -36,6 +36,11 @@ Edita `backend/.env`:
 | `CORS_ORIGIN` | URL del frontend (por defecto `http://localhost:5173`) |
 | `SEED_ADMIN_LOGIN` | Login del usuario administrador inicial |
 | `SEED_ADMIN_PASSWORD` | Contraseña del usuario administrador inicial — cámbiala después del primer login |
+| `OIDC_ISSUER_URL` | Opcional. URL del proveedor de identidad del cliente (Microsoft Entra ID, Google, Okta, Auth0, Keycloak...). Vacío = solo acceso local |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | Credenciales de la aplicación registrada en ese proveedor |
+| `OIDC_REDIRECT_URI` | URL de callback que hay que autorizar en el proveedor, ej: `https://tu-dominio/api/auth/oidc/callback` |
+
+Con OIDC habilitado, cada `Usuario` sigue creándose manualmente en el módulo Usuarios (con su Centro/Rol/Grupo Responsable) — el login solo confirma la identidad contra el proveedor por `email`; nunca crea cuentas nuevas.
 
 Instala dependencias, aplica el esquema y crea el usuario administrador:
 
