@@ -676,9 +676,15 @@
         (node.rows || []).forEach(function(row) { (Array.isArray(row) ? row : []).forEach(patch24hSchema); });
       }
 
+      // Target origin for messages sent up to the parent app: this page is always served
+      // same-origin with the app that embeds it (from /formio in the app's own public dir),
+      // so window.location.origin is the correct, safe target — never '*', which would let
+      // any page that framed this iframe (by accident or by attack) read the messages.
+      var PARENT_ORIGIN = window.location.origin;
+
       function notifyHeight() {
         var h = document.body.scrollHeight;
-        window.top.postMessage({ type: 'HEIGTH', value: h + 'px' }, '*');
+        window.top.postMessage({ type: 'HEIGTH', value: h + 'px' }, PARENT_ORIGIN);
       }
 
       // ── Datagrid column resizing ─────────────────────────────────────────
@@ -1083,7 +1089,7 @@
               applyCheckedCardState(document.getElementById('render'));
               renderPdfPreviews(form);
               notifyHeight();
-              window.top.postMessage({ type: 'GET_JSONDATA', value: jsonData }, '*');
+              window.top.postMessage({ type: 'GET_JSONDATA', value: jsonData }, PARENT_ORIGIN);
               // Only check ranges when a field actually changes — changeEvt.changed is undefined on initial data load
               if (changeEvt && changeEvt.changed && changeEvt.changed.component) {
                 var comp   = changeEvt.changed.component;
@@ -1117,7 +1123,7 @@
                 }
               }
               var errs = Object.keys(rangeErrors).map(function(k) { return rangeErrors[k]; });
-              window.top.postMessage({ type: 'VALIDATION_STATUS', valid: errs.length === 0, errors: errs }, '*');
+              window.top.postMessage({ type: 'VALIDATION_STATUS', valid: errs.length === 0, errors: errs }, PARENT_ORIGIN);
             });
           }
           // Init after render
@@ -1165,7 +1171,7 @@
         var btn = e.target.closest('.firma-preview-btn');
         if (!btn) return;
         var d = btn.dataset;
-        window.parent.postMessage({ type: 'FIRMA_PREVIEW', firmaKey: d.fk, texto: d.tx, grupo: d.gr }, '*');
+        window.parent.postMessage({ type: 'FIRMA_PREVIEW', firmaKey: d.fk, texto: d.tx, grupo: d.gr }, PARENT_ORIGIN);
       });
 
       // Walk schema and disable fields that come from the OP (either via opMapping or explicit lockedKeys list)
@@ -1187,6 +1193,10 @@
       }
 
       window.addEventListener('message', function (e) {
+        // Only accept commands from the window that actually framed this page — never from
+        // some other origin that got a reference to this iframe (e.g. by opening it directly,
+        // or via a compromised third-party script elsewhere on the page).
+        if (e.source !== window.parent) return;
         if (e.data.type === 'RENDER_JSON') {
           if (!e.data.value) {
             document.getElementById('render').innerHTML =
@@ -1220,7 +1230,7 @@
           }
         }
         if (e.data.type === 'GETDATA_JSON') {
-          window.top.postMessage({ type: 'GETDATARESPONSE_JSON', value: document.getElementById('jsonData').value }, '*');
+          window.top.postMessage({ type: 'GETDATARESPONSE_JSON', value: document.getElementById('jsonData').value }, PARENT_ORIGIN);
         }
       });
 
@@ -1229,7 +1239,7 @@
       // guessing a fixed delay (the previous fixed setTimeout was the root cause of the
       // preview intermittently failing to load: on a slow/cold CDN fetch of formio.full.min.js,
       // window.onload could fire well after the parent's guess had already given up).
-      window.top.postMessage({ type: 'IFRAME_READY' }, '*');
+      window.top.postMessage({ type: 'IFRAME_READY' }, PARENT_ORIGIN);
     };
   </script>
 </body>
