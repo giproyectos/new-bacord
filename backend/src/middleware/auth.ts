@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express'
-import jwt from 'jsonwebtoken'
+import jwt, { type SignOptions } from 'jsonwebtoken'
 import { ForbiddenError, UnauthorizedError } from '../utils/errors.js'
 
 export interface AuthTokenPayload {
@@ -26,6 +26,18 @@ if (!JWT_SECRET) throw new Error('JWT_SECRET no está definido en .env')
 
 export function signToken(payload: AuthTokenPayload): string {
   return jwt.sign(payload, JWT_SECRET as string, { expiresIn: '12h' })
+}
+
+/**
+ * Firma un valor corto de un solo uso (p. ej. el `state`/PKCE del flujo OIDC) con el mismo
+ * secreto de sesión — evita necesitar cookies o un almacén de sesión aparte para ese dato.
+ */
+export function signState<T extends object>(payload: T, expiresIn: SignOptions['expiresIn']): string {
+  return jwt.sign(payload, JWT_SECRET as string, { expiresIn })
+}
+
+export function verifyState<T>(token: string): T {
+  return jwt.verify(token, JWT_SECRET as string) as T
 }
 
 export function requireAuth(req: Request, _res: Response, next: NextFunction) {

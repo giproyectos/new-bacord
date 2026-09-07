@@ -12,6 +12,7 @@ const lz = (fn: () => Promise<Record<string, unknown>>, key: string) =>
 const LoginPage            = lz(() => import('@/features/auth/LoginPage'), 'LoginPage')
 const ActivarCuentaPage    = lz(() => import('@/features/auth/ActivarCuentaPage'), 'ActivarCuentaPage')
 const ConfigurarPinPage    = lz(() => import('@/features/auth/ConfigurarPinPage'), 'ConfigurarPinPage')
+const OidcCallbackPage     = lz(() => import('@/features/auth/OidcCallbackPage'), 'OidcCallbackPage')
 const DashboardPage        = lz(() => import('@/features/dashboard/DashboardPage'), 'DashboardPage')
 const BatchRecordList      = lz(() => import('@/features/batch-record/BatchRecordList'), 'BatchRecordList')
 const EditarBatchRecord    = lz(() => import('@/features/batch-record/EditarBatchRecord'), 'EditarBatchRecord')
@@ -54,6 +55,7 @@ const w = (el: React.ReactNode) => <ErrorBoundary><Suspense fallback={<Spin />}>
 export const router = createBrowserRouter([
   { path: '/login', element: <AuthLayout />, children: [{ index: true, element: w(<LoginPage />) }] },
   { path: '/activar-cuenta', element: <AuthLayout />, children: [{ index: true, element: w(<ActivarCuentaPage />) }] },
+  { path: '/auth/callback', element: <AuthLayout />, children: [{ index: true, element: w(<OidcCallbackPage />) }] },
   {
     element: <AuthGuard />,
     children: [{

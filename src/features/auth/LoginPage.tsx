@@ -1,7 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
+
+const OIDC_ERROR_MENSAJES: Record<string, string> = {
+  no_registrado: 'Su cuenta no está registrada en Bacord. Contacte a su administrador para que le asigne acceso.',
+  proveedor: 'No se pudo completar el inicio de sesión con el proveedor de identidad. Intente de nuevo.',
+  estado_invalido: 'La sesión de inicio de sesión venció o no es válida. Intente de nuevo.',
+}
 
 export function LoginPage() {
   const [login, setLogin] = useState('')
@@ -12,8 +18,15 @@ export function LoginPage() {
   const [email, setEmail] = useState('')
   const [recuperarEnviando, setRecuperarEnviando] = useState(false)
   const [recuperarMensaje, setRecuperarMensaje] = useState('')
+  const [oidc, setOidc] = useState<{ oidcEnabled: boolean; oidcLabel: string } | null>(null)
   const setAuth = useAuthStore((s) => s.login)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    authApi.config().then(setOidc).catch(() => setOidc({ oidcEnabled: false, oidcLabel: '' }))
+    const oidcError = new URLSearchParams(window.location.search).get('oidcError')
+    if (oidcError) setError(OIDC_ERROR_MENSAJES[oidcError] ?? 'No se pudo iniciar sesión con el proveedor de identidad.')
+  }, [])
 
   const cerrarRecuperar = () => { setShowRecuperar(false); setEmail(''); setRecuperarMensaje('') }
 
@@ -94,6 +107,24 @@ export function LoginPage() {
         .login-forgot a { color: var(--navy); text-decoration: none; font-weight: 600; }
         .login-forgot a:hover { text-decoration: underline; }
 
+        .login-oidc-btn {
+          display: flex; align-items: center; justify-content: center; gap: 8px;
+          width: 100%; padding: 11px; margin-bottom: 16px;
+          background: #fff; color: var(--navy); border: 1.5px solid var(--hair-2);
+          border-radius: var(--r-sm); font-size: 14px; font-weight: 600;
+          font-family: var(--f-sans); text-decoration: none; cursor: pointer;
+          transition: border-color 150ms, background 150ms; box-sizing: border-box;
+        }
+        .login-oidc-btn:hover { border-color: var(--navy); background: var(--paper-2); }
+
+        .login-oidc-divider {
+          display: flex; align-items: center; gap: 10px;
+          margin-bottom: 16px; font-size: 11.5px; color: var(--ink-4);
+        }
+        .login-oidc-divider::before, .login-oidc-divider::after {
+          content: ''; flex: 1; height: 1px; background: var(--hair-2);
+        }
+
         .login-error {
           margin-top: 12px; padding: 10px 14px;
           background: #fef2f2; border: 1px solid #fecaca;
@@ -163,6 +194,14 @@ export function LoginPage() {
 
           {/* Form */}
           <div className="login-content">
+            {oidc?.oidcEnabled && (
+              <>
+                <a href={authApi.oidcLoginUrl()} className="login-oidc-btn">
+                  <i className="fa fa-building" /> Ingresar con {oidc.oidcLabel}
+                </a>
+                <div className="login-oidc-divider"><span>o con tu cuenta local</span></div>
+              </>
+            )}
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <input

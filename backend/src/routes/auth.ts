@@ -2,13 +2,14 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
-import { signToken, requireAuth } from '../middleware/auth.js'
+import { signToken, signState, verifyState, requireAuth } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { UnauthorizedError, ValidationError } from '../utils/errors.js'
+import { NotFoundError, UnauthorizedError, ValidationError } from '../utils/errors.js'
 import { cargoDeGrupos, logAudit } from '../services/audit.js'
 import { MODULO_CLAVES } from '../constants/modulos.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
 import { verificarPin } from '../services/pin.js'
+import * as oidc from '../services/oidc.js'
 
 export const authRouter = Router()
 
@@ -60,9 +61,19 @@ async function buildAuthUser(usuario: {
   }
 }
 
-async function findUsableUser(login: string) {
+function findUsableUser(login: string) {
   return prisma.usuario.findUnique({
     where: { login },
+    include: {
+      grupos: { include: { grupo: true } },
+      rol: { select: { id: true, nombre: true, activo: true, modulos: true, modulosEdicion: true } },
+    },
+  })
+}
+
+function findUsableUserByEmail(email: string) {
+  return prisma.usuario.findUnique({
+    where: { email },
     include: {
       grupos: { include: { grupo: true } },
       rol: { select: { id: true, nombre: true, activo: true, modulos: true, modulosEdicion: true } },
@@ -139,6 +150,101 @@ authRouter.post(
       modulos: modulosDe(usuario).join(','), modulosEdicion: modulosEdicionDe(usuario).join(','),
     })
     res.json({ ...authUser, token })
+  })
+)
+
+// ── Inicio de sesión con proveedor externo (OIDC) ───────────────────────────
+// Genérico por diseño: funciona contra cualquier proveedor que cumpla el estándar OIDC
+// (Microsoft Entra ID, Google, Okta, Auth0, Keycloak...), configurado por variables de
+// entorno. Nunca crea un Usuario nuevo — la cuenta (con su Centro/Rol/Grupo Responsable) la
+// tiene que crear antes un administrador desde el módulo Usuarios, igual que hoy.
+
+authRouter.get(
+  '/config',
+  (_req, res) => {
+    res.json({
+      oidcEnabled: oidc.isOidcConfigured(),
+      oidcLabel: process.env.OIDC_LABEL || 'tu cuenta corporativa',
+    })
+  }
+)
+
+type OidcState = { cv: string }
+
+authRouter.get(
+  '/oidc/login',
+  asyncHandler(async (_req, res) => {
+    if (!oidc.isOidcConfigured()) throw new NotFoundError('El inicio de sesión con proveedor externo no está configurado')
+    const codeVerifier = oidc.randomCodeVerifier()
+    const codeChallenge = await oidc.codeChallengeFor(codeVerifier)
+    const state = signState<OidcState>({ cv: codeVerifier }, '10m')
+    const url = await oidc.getAuthorizationUrl(state, codeChallenge)
+    res.redirect(url)
+  })
+)
+
+authRouter.get(
+  '/oidc/callback',
+  asyncHandler(async (req, res) => {
+    const frontend = process.env.CORS_ORIGIN ?? 'http://localhost:5173'
+    if (!oidc.isOidcConfigured()) throw new NotFoundError('El inicio de sesión con proveedor externo no está configurado')
+
+    const stateParam = typeof req.query.state === 'string' ? req.query.state : ''
+    let codeVerifier: string
+    try {
+      codeVerifier = verifyState<OidcState>(stateParam).cv
+    } catch {
+      return res.redirect(`${frontend}/login?oidcError=estado_invalido`)
+    }
+
+    const callbackUrl = new URL(req.originalUrl, `${req.protocol}://${req.get('host')}`)
+    let identidad: Awaited<ReturnType<typeof oidc.exchangeCode>>
+    try {
+      identidad = await oidc.exchangeCode(callbackUrl, codeVerifier, stateParam)
+    } catch (err) {
+      console.error('[oidc] Error al canjear el código de autorización:', err)
+      return res.redirect(`${frontend}/login?oidcError=proveedor`)
+    }
+
+    const usuario = await findUsableUserByEmail(identidad.email)
+
+    const rechazar = async (motivo: string) => {
+      await logAudit(prisma, {
+        entidad: 'Sesion', idEntidad: usuario?.idUsuario ?? 0,
+        descripcionEntidad: `Intento de acceso fallido (OIDC) — correo: "${identidad.email}"`,
+        accion: 'LOGIN_FALLIDO', modulo: 'autenticacion', motivo,
+        actor: usuario
+          ? { idUsuario: usuario.idUsuario, nombreUsuario: `${usuario.nombres} ${usuario.apellidos}`, loginUsuario: usuario.login, cargo: '—' }
+          : { idUsuario: 0, nombreUsuario: 'Desconocido', loginUsuario: identidad.email, cargo: '—' },
+      })
+      res.redirect(`${frontend}/login?oidcError=no_registrado`)
+    }
+
+    // Nunca se crea un Usuario aquí — si el correo no está registrado en Bacord, se rechaza y
+    // queda en el log de accesos para que el administrador lo revise.
+    if (!usuario) return rechazar('Correo no registrado en Bacord')
+
+    if (usuario.fechaCaducidad && usuario.fechaCaducidad < new Date()) {
+      if (usuario.activo) await prisma.usuario.update({ where: { idUsuario: usuario.idUsuario }, data: { activo: false } })
+      return rechazar('Cuenta caducada')
+    }
+    if (!usuario.activo) return rechazar('Usuario inactivo')
+    if (usuario.bloqueado) return rechazar('Usuario bloqueado')
+
+    const cargo = cargoDeGrupos(usuario.grupos.map((g) => g.grupo.nombre), usuario.esAdministrador)
+    await logAudit(prisma, {
+      entidad: 'Sesion', idEntidad: usuario.idUsuario, descripcionEntidad: `Inicio de sesión exitoso (OIDC) — ${usuario.login}`,
+      accion: 'LOGIN', modulo: 'autenticacion',
+      actor: { idUsuario: usuario.idUsuario, nombreUsuario: `${usuario.nombres} ${usuario.apellidos}`, loginUsuario: usuario.login, cargo },
+    })
+
+    const authUser = await buildAuthUser(usuario)
+    const token = signToken({
+      idUsuario: usuario.idUsuario, login: usuario.login, esAdministrador: usuario.esAdministrador,
+      modulos: modulosDe(usuario).join(','), modulosEdicion: modulosEdicionDe(usuario).join(','),
+    })
+    const session = encodeURIComponent(JSON.stringify({ ...authUser, token }))
+    res.redirect(`${frontend}/auth/callback#session=${session}`)
   })
 )
 
