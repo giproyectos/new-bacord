@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { ChevronDown, ChevronRight, User, LogOut, Menu } from 'lucide-react'
+import { ChevronDown, ChevronRight, User, LogOut, Menu, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useAudit } from '@/hooks/useAudit'
 
@@ -245,6 +245,7 @@ export function MainLayout() {
 
   const PAGE_TITLES: Record<string, string> = {
     '/':                               'Inicio',
+    '/mi-perfil/pin':                  'PIN de Firma Electrónica',
     '/batch-records':                  'Batch Records',
     '/recetas-maestras':               'Recetas Maestras',
     '/ordenes-proceso':                'Órdenes de Proceso',
@@ -602,6 +603,10 @@ export function MainLayout() {
                 />
                 <span>{user?.nombres}</span>
               </div>
+              <button className="header-logout" onClick={() => navigate('/mi-perfil/pin')} aria-label="Configurar PIN de firma">
+                <KeyRound size={14} aria-hidden="true" />
+                PIN de firma
+              </button>
               <button className="header-logout" onClick={handleLogout} aria-label="Cerrar sesión">
                 <LogOut size={14} aria-hidden="true" />
                 Salir

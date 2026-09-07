@@ -8,6 +8,7 @@ import { UnauthorizedError, ValidationError } from '../utils/errors.js'
 import { cargoDeGrupos, logAudit } from '../services/audit.js'
 import { MODULO_CLAVES } from '../constants/modulos.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
+import { verificarPin } from '../services/pin.js'
 
 export const authRouter = Router()
 
@@ -143,7 +144,7 @@ authRouter.post(
 
 const validarFirmaSchema = z.object({
   login: z.string().min(1),
-  clave: z.string().min(1),
+  pin: z.string().min(1),
 })
 
 authRouter.post(
@@ -151,18 +152,57 @@ authRouter.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const parsed = validarFirmaSchema.safeParse(req.body)
-    if (!parsed.success) throw new ValidationError('login y clave son requeridos')
-    const { login, clave } = parsed.data
+    if (!parsed.success) throw new ValidationError('login y pin son requeridos')
+    const { login, pin } = parsed.data
 
     const usuario = await prisma.usuario.findUnique({ where: { login } })
-    if (!usuario || !usuario.activo || usuario.bloqueado || !usuario.passwordHash) {
+    if (!usuario || !usuario.activo || usuario.bloqueado) {
       return res.json({ estado: false, mensaje: 'Usuario no válido para firmar' })
     }
 
-    const passwordOk = await bcrypt.compare(clave, usuario.passwordHash)
-    if (!passwordOk) return res.json({ estado: false, mensaje: 'Contraseña incorrecta' })
+    const pinCheck = await verificarPin(prisma, usuario, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
 
     res.json({ estado: true, mensaje: 'Firma válida', datos: { idUsuario: usuario.idUsuario, login: usuario.login } })
+  })
+)
+
+const configurarPinSchema = z.object({
+  pinActual: z.string().optional(),
+  pinNuevo: z.string().regex(/^\d{4,8}$/, 'El PIN debe tener entre 4 y 8 dígitos'),
+})
+
+authRouter.post(
+  '/pin',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const parsed = configurarPinSchema.safeParse(req.body)
+    if (!parsed.success) return res.json({ estado: false, mensaje: parsed.error.errors[0]?.message ?? 'Datos inválidos' })
+    const { pinActual, pinNuevo } = parsed.data
+
+    const usuario = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: req.auth!.idUsuario } })
+
+    // Para configurarlo por primera vez basta con tener sesión activa; para cambiar uno ya
+    // existente se exige el PIN actual — evita que alguien con la sesión abierta de otro
+    // (equipo compartido en planta) le cambie el PIN de firma sin su consentimiento.
+    if (usuario.pinHash) {
+      if (!pinActual) return res.json({ estado: false, mensaje: 'Debe indicar el PIN actual para cambiarlo' })
+      const actualOk = await bcrypt.compare(pinActual, usuario.pinHash)
+      if (!actualOk) return res.json({ estado: false, mensaje: 'El PIN actual no es correcto' })
+    }
+
+    const pinHash = await bcrypt.hash(pinNuevo, 12)
+    await prisma.usuario.update({
+      where: { idUsuario: usuario.idUsuario },
+      data: { pinHash, pinIntentosFallidos: 0, pinBloqueado: false },
+    })
+    await logAudit(prisma, {
+      entidad: 'Sesion', idEntidad: usuario.idUsuario,
+      descripcionEntidad: `PIN de firma ${usuario.pinHash ? 'actualizado' : 'configurado'} — ${usuario.login}`,
+      accion: 'MODIFICAR', modulo: 'autenticacion',
+      actor: { idUsuario: usuario.idUsuario, nombreUsuario: `${usuario.nombres} ${usuario.apellidos}`, loginUsuario: usuario.login, cargo: '—' },
+    })
+    res.json({ estado: true, mensaje: usuario.pinHash ? 'PIN actualizado' : 'PIN configurado' })
   })
 )
 

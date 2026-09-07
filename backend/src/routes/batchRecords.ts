@@ -1,5 +1,4 @@
 import { Router } from 'express'
-import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
@@ -8,6 +7,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { getEstructuraProcesos, recomputePorcentajeAvance } from '../services/batchRecordProgress.js'
 import { logAudit, actorDe } from '../services/audit.js'
 import { findFirmaSeccionEstrategia } from '../services/formioSchema.js'
+import { verificarPin } from '../services/pin.js'
 
 export const batchRecordsRouter = Router()
 
@@ -174,7 +174,7 @@ const firmarSchema = z.object({
   idFirma: z.number().int(),
   bloqueKey: z.string().optional(),
   login: z.string().min(1),
-  clave: z.string().min(1),
+  pin: z.string().min(1),
 })
 
 batchRecordsRouter.post(
@@ -184,7 +184,7 @@ batchRecordsRouter.post(
     const parsed = firmarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const idBatchRecord = Number(req.params.id)
-    const { idDetalle, idFirma, login, clave } = parsed.data
+    const { idDetalle, idFirma, login, pin } = parsed.data
     const bloqueKey = parsed.data.bloqueKey ?? ''
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
@@ -212,11 +212,11 @@ batchRecordsRouter.post(
     if (!firmaPermitida) throw new ValidationError('Esa firma no está permitida para este punto del formulario')
 
     const usuario = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
-    if (!usuario || !usuario.activo || usuario.bloqueado || !usuario.passwordHash) {
+    if (!usuario || !usuario.activo || usuario.bloqueado) {
       return res.json({ estado: false, mensaje: 'Usuario no válido para firmar' })
     }
-    const passwordOk = await bcrypt.compare(clave, usuario.passwordHash)
-    if (!passwordOk) return res.json({ estado: false, mensaje: 'Contraseña incorrecta' })
+    const pinCheck = await verificarPin(prisma, usuario, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
 
     if (!usuario.esAdministrador) {
       const requiereFirma = await prisma.firma.findUnique({ where: { idFirma }, include: { grupo: true } })
@@ -313,7 +313,7 @@ batchRecordsRouter.get(
   })
 )
 
-const liberarSchema = z.object({ login: z.string().min(1), clave: z.string().min(1), observacion: z.string().optional() })
+const liberarSchema = z.object({ login: z.string().min(1), pin: z.string().min(1), observacion: z.string().optional() })
 
 batchRecordsRouter.post(
   '/:id/liberar',
@@ -322,7 +322,7 @@ batchRecordsRouter.post(
     const parsed = liberarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const idBatchRecord = Number(req.params.id)
-    const { login, clave, observacion } = parsed.data
+    const { login, pin, observacion } = parsed.data
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
     if (!br) throw new NotFoundError('Batch Record no encontrado')
@@ -330,11 +330,11 @@ batchRecordsRouter.post(
 
     // Liberar el lote es un evento crítico GMP: exige re-autenticación explícita del firmante, igual que una firma.
     const usuario = await prisma.usuario.findUnique({ where: { login } })
-    if (!usuario || !usuario.activo || usuario.bloqueado || !usuario.passwordHash) {
+    if (!usuario || !usuario.activo || usuario.bloqueado) {
       return res.json({ estado: false, mensaje: 'Usuario no válido para liberar el lote' })
     }
-    const passwordOk = await bcrypt.compare(clave, usuario.passwordHash)
-    if (!passwordOk) return res.json({ estado: false, mensaje: 'Contraseña incorrecta' })
+    const pinCheck = await verificarPin(prisma, usuario, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
 
     const liberacion = await prisma.$transaction(async (tx) => {
       const creada = await tx.batchRecordLiberacion.create({

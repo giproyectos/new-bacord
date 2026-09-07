@@ -310,12 +310,12 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
   texto: string
   grupo?: string
   showObservacion?: boolean
-  onSubmit: (login: string, clave: string, observacion?: string) => Promise<{ estado: boolean; mensaje: string }>
+  onSubmit: (login: string, pin: string, observacion?: string) => Promise<{ estado: boolean; mensaje: string }>
   onClose: () => void
 }) {
   const sessionUser = useAuthStore(s => s.user)
   const [login,   setLogin]   = useState(sessionUser?.login ?? '')
-  const [pwd,     setPwd]     = useState('')
+  const [pin,     setPin]     = useState('')
   const [obs,     setObs]     = useState('')
   const [show,    setShow]    = useState(false)
   const [error,   setError]   = useState('')
@@ -325,7 +325,7 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
     e.preventDefault()
     setLoading(true); setError('')
     try {
-      const result = await onSubmit(login.trim(), pwd, showObservacion ? obs.trim() : undefined)
+      const result = await onSubmit(login.trim(), pin, showObservacion ? obs.trim() : undefined)
       if (!result.estado) { setError(result.mensaje); return }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al procesar la solicitud')
@@ -371,12 +371,12 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
             </div>
             <div>
               <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
-                Contraseña <span style={{ color:'var(--orange)',fontWeight:400 }}>(requerida)</span>
+                PIN de firma <span style={{ color:'var(--orange)',fontWeight:400 }}>(requerido)</span>
               </label>
               <div style={{ position:'relative' }}>
-                <input type={show ? 'text' : 'password'} className="form-control" value={pwd}
-                  onChange={e => { setPwd(e.target.value); setError('') }}
-                  placeholder="••••••••" style={{ paddingRight:36 }} />
+                <input type={show ? 'text' : 'password'} inputMode="numeric" className="form-control" value={pin}
+                  onChange={e => { setPin(e.target.value); setError('') }}
+                  placeholder="••••••" style={{ paddingRight:36 }} />
                 <button type="button"
                   style={{ position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--ink-4)' }}
                   onClick={() => setShow(s => !s)}>
@@ -400,7 +400,7 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
           </div>
           <div style={{ padding:'14px 22px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
             <button type="button" className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
-            <button type="submit" className="btn btn-primary" disabled={!login || !pwd || loading}>
+            <button type="submit" className="btn btn-primary" disabled={!login || !pin || loading}>
               {loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-pen" /> Firmar</>}
             </button>
           </div>
@@ -2363,11 +2363,11 @@ ${procsSections}
       {firmaTarget && (
         <FirmaModal
           titulo="Firma Electrónica"
-          subtitulo="Ingrese sus credenciales para firmar"
+          subtitulo="Ingrese su usuario y PIN de firma"
           texto={firmaTarget.firma.texto}
           grupo={firmaTarget.firma.firma.grupo.nombre}
-          onSubmit={async (login, clave) => {
-            const res = await batchRecordApi.firmar(idNum, firmaTarget.detalle.id, firmaTarget.firma.idFirma, login, clave)
+          onSubmit={async (login, pin) => {
+            const res = await batchRecordApi.firmar(idNum, firmaTarget.detalle.id, firmaTarget.firma.idFirma, login, pin)
             if (res.estado) {
               await cargarTodo()
               setFirmaTarget(null)
@@ -2381,11 +2381,11 @@ ${procsSections}
       {liberarModal && !liberacion && (
         <FirmaModal
           titulo="Liberación de Lote"
-          subtitulo="Ingrese sus credenciales para autorizar"
+          subtitulo="Ingrese su usuario y PIN de firma para autorizar"
           texto="Liberación oficial del lote para distribución"
           showObservacion
-          onSubmit={async (login, clave, observacion) => {
-            const res = await batchRecordApi.liberar(idNum, login, clave, observacion)
+          onSubmit={async (login, pin, observacion) => {
+            const res = await batchRecordApi.liberar(idNum, login, pin, observacion)
             if (res.estado) {
               await cargarTodo()
               setLiberarModal(false)

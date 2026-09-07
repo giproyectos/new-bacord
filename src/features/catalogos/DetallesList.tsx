@@ -2092,7 +2092,7 @@ function ImportJsonModal({ onClose, onImport }: {
 
 // ─── PreviewFirmaModal ────────────────────────────────────────────────────────
 
-async function validateFirmaCredentials(loginInput: string, pwd: string, grupoRequerido: string): Promise<string | null> {
+async function validateFirmaCredentials(loginInput: string, pin: string, grupoRequerido: string): Promise<string | null> {
   const login = loginInput.trim()
   try {
     const usuarios = await usuariosApi.listar()
@@ -2105,7 +2105,7 @@ async function validateFirmaCredentials(loginInput: string, pwd: string, grupoRe
       if (!grupos.includes(grupoRequerido))
         return `"${u.nombres} ${u.apellidos}" no pertenece al grupo "${grupoRequerido}"`
     }
-    const res = await authApi.validarFirma(login, pwd)
+    const res = await authApi.validarFirma(login, pin)
     return res.estado ? null : res.mensaje
   } catch {
     return 'No se pudo validar las credenciales'
@@ -2118,7 +2118,7 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
   onClose: () => void
 }) {
   const [login, setLogin] = useState('')
-  const [pwd,   setPwd]   = useState('')
+  const [pin,   setPin]   = useState('')
   const [show,  setShow]  = useState(false)
   const [err,   setErr]   = useState('')
   const [loading, setLoading] = useState(false)
@@ -2126,7 +2126,7 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    const msg = await validateFirmaCredentials(login, pwd, firma.grupo)
+    const msg = await validateFirmaCredentials(login, pin, firma.grupo)
     setLoading(false)
     if (msg) { setErr(msg); return }
     onConfirm()
@@ -2173,11 +2173,11 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
             </div>
             <div>
               <label style={{ display:'block', fontSize:12, fontWeight:600, color:'var(--ink-2)', marginBottom:5 }}>
-                Contraseña <span style={{ color:'var(--orange)' }}>*</span>
+                PIN de firma <span style={{ color:'var(--orange)' }}>*</span>
               </label>
               <div style={{ position:'relative' }}>
-                <input type={show ? 'text' : 'password'} style={{ ...INP_S, paddingRight:36 }} value={pwd}
-                  placeholder="••••••••" onChange={e => { setPwd(e.target.value); setErr('') }} />
+                <input type={show ? 'text' : 'password'} inputMode="numeric" style={{ ...INP_S, paddingRight:36 }} value={pin}
+                  placeholder="••••••" onChange={e => { setPin(e.target.value); setErr('') }} />
                 <button type="button" onClick={() => setShow(s => !s)}
                   style={{ position:'absolute', right:10, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--ink-4)', fontSize:13 }}>
                   <i className={`fa fa-${show ? 'eye-slash' : 'eye'}`} />
@@ -2192,7 +2192,7 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
           </div>
           <div style={{ padding:'12px 20px', borderTop:'1px solid var(--hair)', display:'flex', justifyContent:'flex-end', gap:8 }}>
             <button type="button" className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
-            <button type="submit" className="btn btn-primary" disabled={!login || !pwd || loading}>{loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-pen" /> Firmar</>}</button>
+            <button type="submit" className="btn btn-primary" disabled={!login || !pin || loading}>{loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-pen" /> Firmar</>}</button>
           </div>
         </form>
       </div>

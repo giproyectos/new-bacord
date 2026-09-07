@@ -100,6 +100,11 @@ export function UsuariosList() {
     setAviso(res.mensaje)
     cargar()
   }
+  const reiniciarPin = async (u: Usuario) => {
+    const res = await usuariosApi.resetPin(u.idUsuario)
+    setAviso(res.mensaje)
+    cargar()
+  }
 
   const filtered = useMemo(() => {
     return data.filter(u => {
@@ -128,6 +133,8 @@ export function UsuariosList() {
           {r.activo ? 'Activo' : 'Inactivo'}
           {!!r.bloqueado && <span style={{ marginLeft: 4, color: '#DC2626' }} title="Usuario bloqueado por intentos fallidos"><i className="fa fa-lock" /></span>}
           {r.activacionPendiente && <span style={{ marginLeft: 4, color: '#D97706' }} title="Aún no ha activado su cuenta"><i className="fa fa-hourglass-half" /></span>}
+          {r.pinBloqueado && <span style={{ marginLeft: 4, color: '#DC2626' }} title="PIN de firma bloqueado por intentos fallidos"><i className="fa fa-key" /></span>}
+          {!r.activacionPendiente && !r.pinConfigurado && <span style={{ marginLeft: 4, color: '#D97706' }} title="Aún no ha configurado su PIN de firma"><i className="fa fa-key" /></span>}
         </span>
       ),
     },
@@ -138,6 +145,9 @@ export function UsuariosList() {
           <button className="dt-ab dt-ab-edit" title="Editar" onClick={() => openEditar(r)}><i className="fa fa-pencil-alt" /></button>
           {!!r.bloqueado && (
             <button className="dt-ab dt-ab-extra" title="Desbloquear" onClick={() => desbloquear(r)}><i className="fa fa-unlock" /></button>
+          )}
+          {(r.pinConfigurado || r.pinBloqueado) && (
+            <button className="dt-ab dt-ab-extra" title="Reiniciar PIN de firma" onClick={() => reiniciarPin(r)}><i className="fa fa-key" /></button>
           )}
           <button
             className="dt-ab dt-ab-extra"

@@ -24,4 +24,5 @@ export const usuariosApi = {
   desbloquear: async (id: number): Promise<Resultado> => (await http.post<Resultado>(`/usuarios/${id}/desbloquear`)).data,
   eliminar: async (id: number): Promise<Resultado> => (await http.delete<Resultado>(`/usuarios/${id}`)).data,
   reenviarInvitacion: async (id: number): Promise<Resultado> => (await http.post<Resultado>(`/usuarios/${id}/reenviar-invitacion`)).data,
+  resetPin: async (id: number): Promise<Resultado> => (await http.post<Resultado>(`/usuarios/${id}/reset-pin`)).data,
 }

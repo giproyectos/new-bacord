@@ -95,8 +95,8 @@ export const batchRecordApi = {
   getFirmas: async (idBatchRecord: number): Promise<BatchRecordFirmaRegistrada[]> =>
     (await http.get<BatchRecordFirmaRegistrada[]>(`/batch-records/${idBatchRecord}/firmas`)).data,
 
-  firmar: async (idBatchRecord: number, idDetalle: number, idFirma: number, login: string, clave: string, bloqueKey = '') =>
-    (await http.post<Resultado<BatchRecordFirmaRegistrada>>(`/batch-records/${idBatchRecord}/firmas`, { idDetalle, idFirma, login, clave, bloqueKey })).data,
+  firmar: async (idBatchRecord: number, idDetalle: number, idFirma: number, login: string, pin: string, bloqueKey = '') =>
+    (await http.post<Resultado<BatchRecordFirmaRegistrada>>(`/batch-records/${idBatchRecord}/firmas`, { idDetalle, idFirma, login, pin, bloqueKey })).data,
 
   derogarFirma: async (idBatchRecord: number, idFirmaRegistro: number, motivo: string): Promise<Resultado> =>
     (await http.post<Resultado>(`/batch-records/${idBatchRecord}/firmas/${idFirmaRegistro}/derogar`, { motivo })).data,
@@ -104,12 +104,12 @@ export const batchRecordApi = {
   getLiberacion: async (idBatchRecord: number): Promise<BatchRecordLiberacionInfo | null> =>
     (await http.get<BatchRecordLiberacionInfo | null>(`/batch-records/${idBatchRecord}/liberacion`)).data,
 
-  liberar: async (idBatchRecord: number, login: string, clave: string, observacion?: string): Promise<Resultado<BatchRecordLiberacionInfo>> =>
-    (await http.post<Resultado<BatchRecordLiberacionInfo>>(`/batch-records/${idBatchRecord}/liberar`, { login, clave, observacion })).data,
+  liberar: async (idBatchRecord: number, login: string, pin: string, observacion?: string): Promise<Resultado<BatchRecordLiberacionInfo>> =>
+    (await http.post<Resultado<BatchRecordLiberacionInfo>>(`/batch-records/${idBatchRecord}/liberar`, { login, pin, observacion })).data,
 
   cancelar: async (idBatchRecord: number, motivo: string): Promise<Resultado> =>
     (await http.post<Resultado>(`/batch-records/${idBatchRecord}/cancelar`, { motivo })).data,
 
-  // Compatibilidad: el flujo de firma en pantalla valida la clave del firmante antes de registrarla.
-  validarFirma: (login: string, codigo: string) => authApi.validarFirma(login, codigo),
+  // Compatibilidad: el flujo de firma en pantalla valida el PIN de firma del firmante antes de registrarla.
+  validarFirma: (login: string, pin: string) => authApi.validarFirma(login, pin),
 }

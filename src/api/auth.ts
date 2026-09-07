@@ -6,8 +6,8 @@ export const authApi = {
     const { data } = await http.post<AuthUser>('/auth/login', { login, clave })
     return data
   },
-  validarFirma: async (login: string, clave: string) => {
-    const { data } = await http.post<{ estado: boolean; mensaje: string }>('/auth/validar-firma', { login, clave })
+  validarFirma: async (login: string, pin: string) => {
+    const { data } = await http.post<{ estado: boolean; mensaje: string }>('/auth/validar-firma', { login, pin })
     return data
   },
   olvideClave: async (email: string): Promise<Resultado> =>
@@ -16,4 +16,6 @@ export const authApi = {
     (await http.get<{ valido: boolean; nombre?: string }>('/auth/activar-cuenta', { params: { token } })).data,
   activarCuenta: async (token: string, password: string): Promise<Resultado> =>
     (await http.post<Resultado>('/auth/activar-cuenta', { token, password })).data,
+  configurarPin: async (pinNuevo: string, pinActual?: string): Promise<Resultado> =>
+    (await http.post<Resultado>('/auth/pin', { pinNuevo, pinActual })).data,
 }

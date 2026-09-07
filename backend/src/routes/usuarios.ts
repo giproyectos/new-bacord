@@ -20,16 +20,17 @@ const publicSelect = {
   idUsuario: true, numeroIdentificacion: true, nombres: true, apellidos: true,
   login: true, email: true, activo: true, idCentro: true, esAdministrador: true,
   bloqueado: true, intentosFallidos: true, fechaCreacion: true, fechaCaducidad: true,
-  passwordHash: true,
+  passwordHash: true, pinHash: true, pinBloqueado: true,
   idRol: true, rol: { select: { id: true, nombre: true } },
   grupos: { select: { grupo: { select: { id: true, nombre: true } } } },
 } as const
 
 function toDto(u: Awaited<ReturnType<typeof findAll>>[number]) {
-  const { passwordHash, ...rest } = u
+  const { passwordHash, pinHash, ...rest } = u
   return {
     ...rest,
     activacionPendiente: passwordHash === null,
+    pinConfigurado: pinHash !== null,
     rolNombre: u.rol?.nombre ?? '',
     grupos: u.grupos.map((g) => g.grupo.nombre).join(','),
     idGrupos: u.grupos.map((g) => g.grupo.id).join(','),
@@ -190,6 +191,26 @@ usuariosRouter.post(
       })
     })
     res.json({ estado: true, mensaje: 'Usuario desbloqueado' })
+  })
+)
+
+usuariosRouter.post(
+  '/:id/reset-pin',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const idUsuario = Number(req.params.id)
+    const usuario = await prisma.usuario.findUnique({ where: { idUsuario } })
+    if (!usuario) throw new NotFoundError('Usuario no encontrado')
+
+    await prisma.$transaction(async (tx) => {
+      await tx.usuario.update({ where: { idUsuario }, data: { pinHash: null, pinBloqueado: false, pinIntentosFallidos: 0 } })
+      await logAudit(tx, {
+        entidad: 'Usuario', idEntidad: idUsuario, descripcionEntidad: `${usuario.login} — ${usuario.nombres} ${usuario.apellidos}`,
+        accion: 'MODIFICAR', modulo: 'usuarios', motivo: 'PIN de firma reiniciado por el administrador — debe configurar uno nuevo',
+        actor: await actorDe(prisma, req.auth!.idUsuario),
+      })
+    })
+    res.json({ estado: true, mensaje: 'PIN de firma reiniciado. El usuario debe configurar uno nuevo al ingresar' })
   })
 )
 

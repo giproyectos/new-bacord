@@ -81,6 +81,13 @@ model Usuario {
   tokenActivacion      String?   @unique
   tokenActivacionExpira DateTime?
 
+  /// PIN de firma electrónica — secreto corto, independiente de la contraseña de acceso (o del
+  /// futuro login OIDC), usado únicamente para confirmar el acto de firmar/liberar un lote.
+  /// Nulo hasta que el usuario lo configure la primera vez; sin PIN configurado no puede firmar.
+  pinHash              String?
+  pinIntentosFallidos  Int      @default(0)
+  pinBloqueado         Boolean  @default(false)
+
   grupos UsuarioGrupo[]
 
   formulasControlCreadas FormulaControl[] @relation("FCCreador")

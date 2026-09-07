@@ -11,6 +11,7 @@ const lz = (fn: () => Promise<Record<string, unknown>>, key: string) =>
 // Pantallas
 const LoginPage            = lz(() => import('@/features/auth/LoginPage'), 'LoginPage')
 const ActivarCuentaPage    = lz(() => import('@/features/auth/ActivarCuentaPage'), 'ActivarCuentaPage')
+const ConfigurarPinPage    = lz(() => import('@/features/auth/ConfigurarPinPage'), 'ConfigurarPinPage')
 const DashboardPage        = lz(() => import('@/features/dashboard/DashboardPage'), 'DashboardPage')
 const BatchRecordList      = lz(() => import('@/features/batch-record/BatchRecordList'), 'BatchRecordList')
 const EditarBatchRecord    = lz(() => import('@/features/batch-record/EditarBatchRecord'), 'EditarBatchRecord')
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
       element: <MainLayout />,
       children: [
         { path: '/',  element: w(<DashboardPage />) },
+        { path: '/mi-perfil/pin', element: w(<ConfigurarPinPage />) },
 
         // Operación
         { path: '/batch-records',                element: w(<BatchRecordList />) },

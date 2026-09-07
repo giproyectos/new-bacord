@@ -13,6 +13,7 @@ export interface Usuario {
   esAdministrador: number; bloqueado: number; intentosFallidos: number
   idRol: number | null; rolNombre: string
   fechaCaducidad: string | null; activacionPendiente: boolean
+  pinConfigurado: boolean; pinBloqueado: boolean
   grupos: string; idGrupos: string; fechaCreacion: string
 }
 export interface Rol {
