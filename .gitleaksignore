@@ -1,0 +1,6 @@
+# Falsos positivos confirmados manualmente — no son credenciales.
+# Ambos son el campo "key" de un componente de formulario Form.io en un archivo de datos de
+# demo ya eliminado del repo (Datos Demo/DEMO_ET1_F3_Verificacion.txt, commit 5bdf04f):
+# "txtEstadoFinalET1" y "numDuracionET1" respectivamente — identificadores de campo, no secretos.
+5bdf04f991cff8cf51e06c1b7591c1f731ade4dd:Datos Demo/DEMO_ET1_F3_Verificacion.txt:generic-api-key:184
+5bdf04f991cff8cf51e06c1b7591c1f731ade4dd:Datos Demo/DEMO_ET1_F3_Verificacion.txt:generic-api-key:248

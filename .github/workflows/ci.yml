@@ -1,0 +1,113 @@
+name: CI
+
+# Fase 3 del plan de mejoras: nada llega a master sin pasar por acá primero. Cubre lo mínimo
+# que un contribuyente correría en su máquina — build, migraciones, pruebas — más dos escaneos
+# de seguridad (secretos y dependencias vulnerables) que hoy nadie corre a mano.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Escaneo de secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # necesita el historial completo, no solo el último commit
+
+      - name: Instalar gitleaks
+        run: |
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.29.1/gitleaks_8.29.1_linux_x64.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Escanear el repositorio completo
+        run: gitleaks detect --source . --redact --verbose
+
+  backend:
+    name: Backend — build, migraciones y pruebas
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: bacord_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Credenciales de un contenedor MySQL efímero que solo existe durante este job — no son
+      # secretos reales y no hace falta guardarlas en GitHub Secrets.
+      DATABASE_URL: mysql://root@127.0.0.1:3306/bacord_ci
+      JWT_SECRET: ci-secret-solo-para-este-pipeline-no-usar-en-otro-lado
+      CORS_ORIGIN: http://localhost:5173
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Auditoría de dependencias (informativo — ver nota abajo)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Generar Prisma Client
+        run: npx prisma generate
+
+      - name: Aplicar migraciones sobre una base vacía
+        # Esto es, en la práctica, la prueba más importante del pipeline: si el historial de
+        # migraciones alguna vez vuelve a desalinearse del schema (como pasó antes de la Fase 2),
+        # este paso falla aquí, no en el despliegue a un cliente real.
+        run: npx prisma migrate deploy
+
+      - name: Compilar (typecheck)
+        run: npm run build
+
+      - name: Pruebas
+        run: npm test
+
+  frontend:
+    name: Frontend — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Auditoría de dependencias (informativo — ver nota abajo)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Compilar
+        run: npm run build
