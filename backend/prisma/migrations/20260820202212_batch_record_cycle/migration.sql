@@ -1,12 +1,12 @@
 /*
   Warnings:
 
-  - You are about to drop the column `cerrado` on the `batchrecorddetalledata` table. All the data in the column will be lost.
-  - You are about to drop the column `fechaCierre` on the `batchrecorddetalledata` table. All the data in the column will be lost.
+  - You are about to drop the column `cerrado` on the `BatchRecordDetalleData` table. All the data in the column will be lost.
+  - You are about to drop the column `fechaCierre` on the `BatchRecordDetalleData` table. All the data in the column will be lost.
 
 */
 -- AlterTable
-ALTER TABLE `batchrecorddetalledata` DROP COLUMN `cerrado`,
+ALTER TABLE `BatchRecordDetalleData` DROP COLUMN `cerrado`,
     DROP COLUMN `fechaCierre`;
 
 -- CreateTable
