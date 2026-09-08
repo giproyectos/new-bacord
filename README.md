@@ -53,6 +53,29 @@ npm run dev
 
 El API queda escuchando en `http://localhost:4000`.
 
+Las migraciones en `backend/prisma/migrations/` ya están verificadas contra un MySQL real (`npx prisma migrate deploy` sobre una base vacía reproduce exactamente el schema actual) — es la vía recomendada para producción/CI en vez de `db push`.
+
+## Pruebas automatizadas (backend)
+
+Cubren los flujos críticos de negocio: firmar un paso, cerrar una etapa, liberar un lote — con sus reglas de negocio (no firmar dos veces, no saltar etapas, no liberar antes de tiempo). Corren contra una base MySQL real, separada de la de desarrollo.
+
+Una sola vez, crea la base de pruebas:
+
+```sql
+CREATE DATABASE bacord_test CHARACTER SET utf8mb4;
+CREATE USER 'bacord_test'@'127.0.0.1' IDENTIFIED BY 'bacord_test_pw';
+GRANT ALL PRIVILEGES ON bacord_test.* TO 'bacord_test'@'127.0.0.1';
+```
+
+Luego, desde `backend/`:
+
+```bash
+DATABASE_URL="mysql://bacord_test:bacord_test_pw@127.0.0.1:3306/bacord_test" npx prisma migrate deploy
+npm test
+```
+
+(`backend/.env.test` ya trae esta configuración por defecto — solo hace falta que la base y el usuario existan.)
+
 ## 3. Frontend
 
 Desde la raíz del proyecto:
