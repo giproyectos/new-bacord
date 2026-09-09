@@ -147,7 +147,7 @@ export function CargueMaterialesList() {
   return (
     <>
       <style>{`
-        .cm-drop { border: 2px dashed var(--hair-2); border-radius: var(--r-lg); padding: 40px 20px; text-align: center; cursor: pointer; transition: all 120ms; color: var(--ink-4); }
+        .cm-drop { display: block; border: 2px dashed var(--hair-2); border-radius: var(--r-lg); padding: 40px 20px; text-align: center; cursor: pointer; transition: all 120ms; color: var(--ink-4); }
         .cm-drop:hover, .cm-drop.drag-over { border-color: var(--navy); background: rgba(10,45,99,.03); }
         .cm-drop .drop-icon { font-size: 32px; color: var(--navy); margin-bottom: 10px; display: block; }
       `}</style>
