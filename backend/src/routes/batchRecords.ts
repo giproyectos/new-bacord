@@ -134,7 +134,13 @@ batchRecordsRouter.post(
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
     if (!br) throw new NotFoundError('Batch Record no encontrado')
-    assertEnProceso(br)
+    // No se usa assertEnProceso (exige idEstado === 1) porque firmar el último detalle de toda
+    // la receta —en cualquier etapa— ya deja el BR en Finalizado (2) antes de que se alcance a
+    // cerrar la etapa que lo contiene; bloquear el cierre en ese momento haría imposible cerrar
+    // la última etapa. Cancelado (3) y Liberado (4) sí siguen bloqueados.
+    if (br.idEstado === 3 || br.idEstado === 4) {
+      throw new ConflictError('El Batch Record no está en proceso (ya fue cancelado o liberado)')
+    }
 
     const estructura = await getEstructuraProcesos(prisma, br.idRecetaMaestra)
     const idx = estructura.findIndex((p) => p.idProceso === idProceso)
@@ -144,6 +150,24 @@ batchRecordsRouter.post(
         where: { idBatchRecord_idProceso: { idBatchRecord, idProceso: estructura[idx - 1].idProceso } },
       })
       if (!previoCerrado) throw new ConflictError('Debe cerrar la etapa anterior primero')
+    }
+
+    // El frontend ya deshabilita "Cerrar Proceso" hasta que todas las firmas de cierre de esta
+    // etapa estén completas, pero esa regla no estaba repetida acá — llamando el endpoint
+    // directo se podía cerrar (y así bloquear el orden secuencial de) una etapa sin firmar.
+    const requeridas = new Set<string>()
+    for (const rd of estructura[idx].detalles) {
+      for (const f of rd.detalle.estrategiaFirma?.firmas ?? []) requeridas.add(`${rd.idDetalle}:${f.idFirma}`)
+    }
+    if (requeridas.size > 0) {
+      const firmadas = await prisma.batchRecordFirma.findMany({
+        where: { idBatchRecord, idDetalle: { in: estructura[idx].detalles.map((rd) => rd.idDetalle) }, bloqueKey: '' },
+        select: { idDetalle: true, idFirma: true },
+      })
+      const hechas = new Set(firmadas.map((f) => `${f.idDetalle}:${f.idFirma}`))
+      if ([...requeridas].some((r) => !hechas.has(r))) {
+        throw new ConflictError('Faltan firmas de cierre en esta etapa para poder cerrarla')
+      }
     }
 
     const cierre = await prisma.batchRecordProcesoCierre.upsert({
@@ -382,7 +406,7 @@ batchRecordsRouter.post(
   })
 )
 
-const cancelarSchema = z.object({ motivo: z.string().min(1) })
+const cancelarSchema = z.object({ login: z.string().min(1), pin: z.string().min(1), motivo: z.string().min(1) })
 
 batchRecordsRouter.post(
   '/:id/cancelar',
@@ -390,16 +414,35 @@ batchRecordsRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = cancelarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    const { login, pin, motivo } = parsed.data
     const idBatchRecord = Number(req.params.id)
+
+    const actual = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
+    if (!actual) throw new NotFoundError('Batch Record no encontrado')
+    // Cancelado (3) ya está en el estado que se pediría — y Liberado (4) es un estado terminal:
+    // el lote ya fue aprobado y distribuido, cancelarlo después borraría esa aprobación sin dejar
+    // ningún rastro de que existió (a diferencia de un recall formal, que es un proceso aparte).
+    if (actual.idEstado === 3 || actual.idEstado === 4) {
+      throw new ConflictError('No se puede cancelar un Batch Record ya cancelado o liberado')
+    }
+
+    // Cancelar un lote es un evento crítico GMP — exige re-autenticación explícita con PIN,
+    // igual que firmar, liberar o derogar una firma.
+    const solicitante = await prisma.usuario.findUnique({ where: { login } })
+    if (!solicitante || !solicitante.activo || solicitante.bloqueado) {
+      return res.json({ estado: false, mensaje: 'Usuario no válido para cancelar' })
+    }
+    const pinCheck = await verificarPin(prisma, solicitante, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
 
     const br = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.batchRecord.update({
         where: { idBatchRecord },
-        data: { idEstado: 3, motivoEstado: parsed.data.motivo, idUsuarioModificacion: req.auth!.idUsuario },
+        data: { idEstado: 3, motivoEstado: motivo, idUsuarioModificacion: solicitante.idUsuario },
       })
       await logAudit(tx, {
         entidad: 'BatchRecord', idEntidad: idBatchRecord, descripcionEntidad: `BR-${idBatchRecord}`,
-        accion: 'CANCELAR', modulo: 'batch-record', motivo: parsed.data.motivo, actor: await actorDe(tx, req.auth!.idUsuario),
+        accion: 'CANCELAR', modulo: 'batch-record', motivo, actor: await actorDe(tx, solicitante.idUsuario),
       })
       return actualizado
     })

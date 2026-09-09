@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { batchRecordApi } from '@/api/batchRecord'
@@ -45,9 +46,16 @@ export function BatchRecordList() {
   const [fechaHasta, setFechaHasta]     = useState('')
   const [usuarioFilter, setUsuarioFilter] = useState('')
   const [confirmCancel, setConfirmCancel] = useState<BatchRecord | null>(null)
+  const [cancelLogin, setCancelLogin]     = useState('')
+  const [cancelPin, setCancelPin]         = useState('')
+  const [cancelShowPin, setCancelShowPin] = useState(false)
   const [cancelMotivo, setCancelMotivo]   = useState('')
   const [cancelError, setCancelError]     = useState('')
   const [cancelSaving, setCancelSaving]   = useState(false)
+
+  const cerrarModalCancelar = () => {
+    setConfirmCancel(null); setCancelLogin(''); setCancelPin(''); setCancelMotivo(''); setCancelError('')
+  }
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['batch-records'],
@@ -637,7 +645,7 @@ ${brSections}
               className="dt-ab dt-ab-del"
               title="Cancelar batch record"
               aria-label={`Cancelar BR-${r.idBatchRecord}`}
-              onClick={() => setConfirmCancel(r)}
+              onClick={() => { setConfirmCancel(r); setCancelLogin(authUser?.login ?? '') }}
             >
               <i className="fa fa-ban" aria-hidden="true" />
             </button>
@@ -905,7 +913,7 @@ ${brSections}
           aria-modal="true"
           aria-labelledby="cancel-modal-title"
           style={{ position:'fixed',inset:0,zIndex:200,background:'rgba(10,21,48,.5)',display:'flex',alignItems:'center',justifyContent:'center',padding:20 }}
-          onClick={() => { setConfirmCancel(null); setCancelMotivo('') }}
+          onClick={cerrarModalCancelar}
         >
           <div
             style={{ background:'var(--paper)',borderRadius:'var(--r-xl)',boxShadow:'var(--sh-3)',width:'100%',maxWidth:440 }}
@@ -921,7 +929,7 @@ ${brSections}
               </div>
               <button
                 style={{ background:'rgba(255,255,255,.1)',border:'none',cursor:'pointer',color:'#fff',width:30,height:30,borderRadius:8,fontSize:18,display:'grid',placeItems:'center' }}
-                onClick={() => { setConfirmCancel(null); setCancelMotivo('') }}
+                onClick={cerrarModalCancelar}
                 aria-label="Cerrar"
               >×</button>
             </div>
@@ -936,8 +944,40 @@ ${brSections}
               El registro quedará bloqueado y no podrá reanudarse.
             </div>
 
+            {/* Usuario + PIN — cancelar un lote es un evento GMP crítico, exige la misma
+                re-autenticación que firmar, liberar o derogar una firma. */}
+            <div style={{ padding:'0 22px 14px',display:'flex',flexDirection:'column',gap:14 }}>
+              <div>
+                <label htmlFor="cancel-login" style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                  Usuario <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+                </label>
+                <input
+                  id="cancel-login" className="form-control" value={cancelLogin}
+                  onChange={e => { setCancelLogin(e.target.value); setCancelError('') }}
+                  placeholder="login"
+                />
+              </div>
+              <div>
+                <label htmlFor="cancel-pin" style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                  PIN de firma <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+                </label>
+                <div style={{ position:'relative' }}>
+                  <input
+                    id="cancel-pin" type={cancelShowPin ? 'text' : 'password'} inputMode="numeric" className="form-control"
+                    value={cancelPin} onChange={e => { setCancelPin(e.target.value); setCancelError('') }}
+                    placeholder="••••••" style={{ paddingRight:36 }}
+                  />
+                  <button type="button"
+                    style={{ position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--ink-4)' }}
+                    onClick={() => setCancelShowPin(s => !s)}>
+                    {cancelShowPin ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Motivo */}
-            <div style={{ padding:'14px 22px 18px' }}>
+            <div style={{ padding:'0 22px 18px' }}>
               <label htmlFor="cancel-motivo" style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:6 }}>
                 Motivo de cancelación <span style={{ color:'#DC2626',fontWeight:400 }}>* requerido</span>
               </label>
@@ -966,24 +1006,23 @@ ${brSections}
             <div style={{ padding:'12px 22px 16px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
               <button
                 className="btn btn-gray"
-                onClick={() => { setConfirmCancel(null); setCancelMotivo(''); setCancelError('') }}
+                onClick={cerrarModalCancelar}
               >
                 <i className="fa fa-undo" aria-hidden="true" /> Volver
               </button>
               <button
                 className="btn btn-danger"
-                disabled={!cancelMotivo.trim() || cancelSaving}
-                aria-disabled={!cancelMotivo.trim() || cancelSaving}
+                disabled={!cancelLogin || !cancelPin || !cancelMotivo.trim() || cancelSaving}
+                aria-disabled={!cancelLogin || !cancelPin || !cancelMotivo.trim() || cancelSaving}
                 onClick={async () => {
-                  if (!cancelMotivo.trim()) return
+                  if (!cancelLogin || !cancelPin || !cancelMotivo.trim()) return
                   setCancelError('')
                   setCancelSaving(true)
                   try {
-                    const res = await batchRecordApi.cancelar(confirmCancel.idBatchRecord, cancelMotivo.trim())
+                    const res = await batchRecordApi.cancelar(confirmCancel.idBatchRecord, cancelLogin.trim(), cancelPin, cancelMotivo.trim())
                     if (!res.estado) { setCancelError(res.mensaje); return }
                     queryClient.invalidateQueries({ queryKey: ['batch-records'] })
-                    setConfirmCancel(null)
-                    setCancelMotivo('')
+                    cerrarModalCancelar()
                   } finally {
                     setCancelSaving(false)
                   }

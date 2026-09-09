@@ -92,9 +92,14 @@ describe('POST /api/batch-records/:id/firmas', () => {
 })
 
 describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
-  it('cierra la primera etapa exitosamente', async () => {
+  it('cierra la primera etapa exitosamente una vez firmada', async () => {
     const esc = await crearEscenarioBasico(2)
     const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
 
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`)
@@ -102,6 +107,19 @@ describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.estado).toBe(true)
+  })
+
+  it('rechaza cerrar una etapa con firmas de cierre pendientes', async () => {
+    const esc = await crearEscenarioBasico(2)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(409)
+    const cierres = await prisma.batchRecordProcesoCierre.findMany({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(cierres).toHaveLength(0)
   })
 
   it('no permite cerrar la segunda etapa si la primera sigue abierta', async () => {
@@ -115,14 +133,61 @@ describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
     expect(res.status).toBe(409)
   })
 
-  it('permite cerrar la segunda etapa una vez cerrada la primera', async () => {
+  it('permite cerrar la segunda etapa una vez cerrada y firmada la primera', async () => {
     const esc = await crearEscenarioBasico(2)
     const token = tokenPara(esc.usuarioAdmin)
 
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
     await request(app).post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`).set('Authorization', `Bearer ${token}`)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[1].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
     const res = await request(app).post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[1].idProceso}/cerrar`).set('Authorization', `Bearer ${token}`)
 
     expect(res.status).toBe(200)
+  })
+
+  it('permite cerrar la última etapa aunque firmarla ya haya dejado el BR en Finalizado', async () => {
+    const esc = await crearEscenarioBasico(1)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const firmar = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+    expect(firmar.body.estado).toBe(true)
+    expect((await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })).idEstado).toBe(2)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(200)
+  })
+
+  it('rechaza cerrar una etapa de un BR ya Liberado', async () => {
+    const esc = await crearEscenarioBasico(1)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/liberar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(409)
   })
 })
 
@@ -158,6 +223,79 @@ describe('POST /api/batch-records/:id/liberar', () => {
 
     const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
     expect(br.idEstado).toBe(4) // 4 = Liberado
+  })
+})
+
+describe('POST /api/batch-records/:id/cancelar', () => {
+  it('cancela un BR En proceso', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Defecto detectado durante producción' })
+
+    expect(res.status).toBe(200)
+    const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(br.idEstado).toBe(3) // 3 = Cancelado
+  })
+
+  it('rechaza un PIN incorrecto y no cancela el BR', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: '000000', motivo: 'Intento con PIN incorrecto' })
+
+    expect(res.status).toBe(200) // igual que firmar: responde 200 con estado:false, no un error HTTP
+    expect(res.body.estado).toBe(false)
+    expect(res.body.mensaje).toMatch(/PIN incorrecto/i)
+
+    const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(br.idEstado).toBe(1) // sigue En proceso
+  })
+
+  it('rechaza cancelar un BR ya Liberado', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/liberar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Intento indebido tras liberar' })
+
+    expect(res.status).toBe(409)
+    const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(br.idEstado).toBe(4) // sigue Liberado
+  })
+
+  it('rechaza cancelar un BR ya Cancelado', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Primera cancelación' })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Segundo intento' })
+
+    expect(res.status).toBe(409)
   })
 })
 
@@ -289,7 +427,7 @@ describe('POST /api/batch-records/:id/firmas/:idFirmaRegistro/derogar', () => {
     await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Cancelado para la prueba' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Cancelado para la prueba' })
 
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas/${firmar.body.datos.id}/derogar`)
