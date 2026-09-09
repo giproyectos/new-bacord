@@ -134,7 +134,13 @@ batchRecordsRouter.post(
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
     if (!br) throw new NotFoundError('Batch Record no encontrado')
-    assertEnProceso(br)
+    // No se usa assertEnProceso (exige idEstado === 1) porque firmar el último detalle de toda
+    // la receta —en cualquier etapa— ya deja el BR en Finalizado (2) antes de que se alcance a
+    // cerrar la etapa que lo contiene; bloquear el cierre en ese momento haría imposible cerrar
+    // la última etapa. Cancelado (3) y Liberado (4) sí siguen bloqueados.
+    if (br.idEstado === 3 || br.idEstado === 4) {
+      throw new ConflictError('El Batch Record no está en proceso (ya fue cancelado o liberado)')
+    }
 
     const estructura = await getEstructuraProcesos(prisma, br.idRecetaMaestra)
     const idx = estructura.findIndex((p) => p.idProceso === idProceso)
@@ -144,6 +150,24 @@ batchRecordsRouter.post(
         where: { idBatchRecord_idProceso: { idBatchRecord, idProceso: estructura[idx - 1].idProceso } },
       })
       if (!previoCerrado) throw new ConflictError('Debe cerrar la etapa anterior primero')
+    }
+
+    // El frontend ya deshabilita "Cerrar Proceso" hasta que todas las firmas de cierre de esta
+    // etapa estén completas, pero esa regla no estaba repetida acá — llamando el endpoint
+    // directo se podía cerrar (y así bloquear el orden secuencial de) una etapa sin firmar.
+    const requeridas = new Set<string>()
+    for (const rd of estructura[idx].detalles) {
+      for (const f of rd.detalle.estrategiaFirma?.firmas ?? []) requeridas.add(`${rd.idDetalle}:${f.idFirma}`)
+    }
+    if (requeridas.size > 0) {
+      const firmadas = await prisma.batchRecordFirma.findMany({
+        where: { idBatchRecord, idDetalle: { in: estructura[idx].detalles.map((rd) => rd.idDetalle) }, bloqueKey: '' },
+        select: { idDetalle: true, idFirma: true },
+      })
+      const hechas = new Set(firmadas.map((f) => `${f.idDetalle}:${f.idFirma}`))
+      if ([...requeridas].some((r) => !hechas.has(r))) {
+        throw new ConflictError('Faltan firmas de cierre en esta etapa para poder cerrarla')
+      }
     }
 
     const cierre = await prisma.batchRecordProcesoCierre.upsert({
