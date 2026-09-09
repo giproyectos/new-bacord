@@ -1,6 +1,28 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { authApi } from '@/api/auth'
+import { authApi, type PoliticaPassword } from '@/api/auth'
+
+const POLITICA_POR_DEFECTO: PoliticaPassword = {
+  minCaracteres: 8, requiereMayuscula: true, requiereMinuscula: true, requiereEspecial: true,
+}
+
+/** Frase legible con los requisitos vigentes — la política es configurable por cliente. */
+function describirPolitica(p: PoliticaPassword): string {
+  const requisitos = [`mínimo ${p.minCaracteres} caracteres`]
+  if (p.requiereMayuscula) requisitos.push('una mayúscula')
+  if (p.requiereMinuscula) requisitos.push('una minúscula')
+  if (p.requiereEspecial) requisitos.push('un carácter especial')
+  if (requisitos.length === 1) return `Debe tener ${requisitos[0]}.`
+  return `Debe tener ${requisitos.slice(0, -1).join(', ')} y ${requisitos[requisitos.length - 1]}.`
+}
+
+function validarContraPolitica(password: string, p: PoliticaPassword): string | null {
+  if (password.length < p.minCaracteres) return `La contraseña debe tener al menos ${p.minCaracteres} caracteres`
+  if (p.requiereMayuscula && !/[A-Z]/.test(password)) return 'La contraseña debe incluir al menos una mayúscula'
+  if (p.requiereMinuscula && !/[a-z]/.test(password)) return 'La contraseña debe incluir al menos una minúscula'
+  if (p.requiereEspecial && !/[^A-Za-z0-9]/.test(password)) return 'La contraseña debe incluir al menos un carácter especial'
+  return null
+}
 
 export function ActivarCuentaPage() {
   const [params] = useSearchParams()
@@ -15,6 +37,7 @@ export function ActivarCuentaPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [listo, setListo] = useState(false)
+  const [politica, setPolitica] = useState<PoliticaPassword>(POLITICA_POR_DEFECTO)
 
   useEffect(() => {
     if (!token) { setChecking(false); return }
@@ -22,15 +45,14 @@ export function ActivarCuentaPage() {
       .then(r => { setValido(r.valido); setNombre(r.nombre ?? '') })
       .catch(() => setValido(false))
       .finally(() => setChecking(false))
+    authApi.config().then(cfg => setPolitica(cfg.passwordPolitica)).catch(() => {})
   }, [token])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (password.length < 8) { setError('La contraseña debe tener al menos 8 caracteres'); return }
-    if (!/[a-z]/.test(password)) { setError('La contraseña debe incluir al menos una minúscula'); return }
-    if (!/[A-Z]/.test(password)) { setError('La contraseña debe incluir al menos una mayúscula'); return }
-    if (!/[^A-Za-z0-9]/.test(password)) { setError('La contraseña debe incluir al menos un carácter especial'); return }
+    const errorPolitica = validarContraPolitica(password, politica)
+    if (errorPolitica) { setError(errorPolitica); return }
     if (password !== confirmar) { setError('Las contraseñas no coinciden'); return }
     setLoading(true)
     try {
@@ -89,7 +111,7 @@ export function ActivarCuentaPage() {
                     value={password} onChange={e => setPassword(e.target.value)} autoFocus autoComplete="new-password"
                   />
                   <small style={{ display: 'block', marginTop: 6, color: 'var(--ink-3)', fontSize: 12 }}>
-                    Mínimo 8 caracteres, con mayúscula, minúscula y un carácter especial.
+                    {describirPolitica(politica)}
                   </small>
                 </div>
                 <div className="form-group">

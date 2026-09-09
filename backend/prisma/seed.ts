@@ -29,24 +29,17 @@ async function main() {
 
   // Parámetros de sesión/contraseña — configurables por cliente desde el módulo Parámetros.
   // Se crean solo si no existen, para no pisar un valor que el cliente ya haya ajustado.
-  await prisma.parametro.upsert({
-    where: { nombre: 'sesion_inactividad_minutos' },
-    update: {},
-    create: {
-      nombre: 'sesion_inactividad_minutos',
-      valor: '5',
-      descripcion: 'Minutos de inactividad antes del bloqueo automático de sesión.',
-    },
-  })
-  await prisma.parametro.upsert({
-    where: { nombre: 'password_rotacion_dias' },
-    update: {},
-    create: {
-      nombre: 'password_rotacion_dias',
-      valor: '60',
-      descripcion: 'Días que puede vivir una contraseña antes de exigir su renovación.',
-    },
-  })
+  const parametrosPorDefecto = [
+    { nombre: 'sesion_inactividad_minutos', valor: '5', descripcion: 'Minutos de inactividad antes del bloqueo automático de sesión.' },
+    { nombre: 'password_rotacion_dias', valor: '60', descripcion: 'Días que puede vivir una contraseña antes de exigir su renovación.' },
+    { nombre: 'password_min_caracteres', valor: '8', descripcion: 'Cantidad mínima de caracteres exigida al definir una contraseña.' },
+    { nombre: 'password_requiere_mayuscula', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos una letra mayúscula (true/false).' },
+    { nombre: 'password_requiere_minuscula', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos una letra minúscula (true/false).' },
+    { nombre: 'password_requiere_especial', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos un carácter especial (true/false).' },
+  ]
+  for (const p of parametrosPorDefecto) {
+    await prisma.parametro.upsert({ where: { nombre: p.nombre }, update: {}, create: p })
+  }
 
   console.log(`Seed listo. Usuario admin: ${admin.login} (idUsuario=${admin.idUsuario})`)
 }

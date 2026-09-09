@@ -9,7 +9,7 @@ import { cargoDeGrupos, logAudit } from '../services/audit.js'
 import { MODULO_CLAVES } from '../constants/modulos.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
 import { verificarPin } from '../services/pin.js'
-import { getParametroNumero } from '../services/parametros.js'
+import { getParametroNumero, getPoliticaPassword, validarPassword } from '../services/parametros.js'
 import * as oidc from '../services/oidc.js'
 
 export const authRouter = Router()
@@ -178,12 +178,13 @@ authRouter.post(
 
 authRouter.get(
   '/config',
-  (_req, res) => {
+  asyncHandler(async (_req, res) => {
     res.json({
       oidcEnabled: oidc.isOidcConfigured(),
       oidcLabel: process.env.OIDC_LABEL || 'tu cuenta corporativa',
+      passwordPolitica: await getPoliticaPassword(prisma),
     })
-  }
+  })
 )
 
 // Configuración de sesión visible para cualquier usuario autenticado (no depende del módulo
@@ -384,25 +385,24 @@ authRouter.get(
 
 const activarCuentaSchema = z.object({
   token: z.string().min(1),
-  password: z
-    .string()
-    .min(8, 'La contraseña debe tener al menos 8 caracteres')
-    .regex(/[a-z]/, 'La contraseña debe incluir al menos una minúscula')
-    .regex(/[A-Z]/, 'La contraseña debe incluir al menos una mayúscula')
-    .regex(/[^A-Za-z0-9]/, 'La contraseña debe incluir al menos un carácter especial'),
+  password: z.string().min(1),
 })
 
 authRouter.post(
   '/activar-cuenta',
   asyncHandler(async (req, res) => {
     const parsed = activarCuentaSchema.safeParse(req.body)
-    if (!parsed.success) throw new ValidationError(parsed.error.errors[0]?.message ?? 'Datos inválidos')
+    if (!parsed.success) throw new ValidationError('Datos inválidos')
     const { token, password } = parsed.data
 
     const usuario = await prisma.usuario.findUnique({ where: { tokenActivacion: token } })
     if (!usuario || !usuario.tokenActivacionExpira || usuario.tokenActivacionExpira < new Date()) {
       return res.json({ estado: false, mensaje: 'El enlace es inválido o venció. Solicite uno nuevo al administrador.' })
     }
+
+    const politica = await getPoliticaPassword(prisma)
+    const errorPassword = validarPassword(password, politica)
+    if (errorPassword) return res.json({ estado: false, mensaje: errorPassword })
 
     const passwordHash = await bcrypt.hash(password, 12)
     await prisma.usuario.update({
