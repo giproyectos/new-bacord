@@ -247,14 +247,36 @@ function FirmaStamp({ info }: { info: FirmaInfo }) {
 }
 
 // ── DerogacionModal ───────────────────────────────────────────────────────
+// Revocar una firma exige la misma re-autenticación con PIN que firmarla o liberar el lote —
+// no basta con que la sesión del navegador siga abierta (riesgo de equipo compartido en planta).
 function DerogacionModal({ firmaInfo, texto, grupo, onConfirm, onClose }: {
   firmaInfo: FirmaInfo
   texto: string
   grupo: string
-  onConfirm: (motivo: string) => void
+  onConfirm: (login: string, pin: string, motivo: string) => Promise<{ estado: boolean; mensaje: string }>
   onClose: () => void
 }) {
+  const sessionUser = useAuthStore(s => s.user)
+  const [login,   setLogin]   = useState(sessionUser?.login ?? '')
+  const [pin,     setPin]     = useState('')
+  const [show,    setShow]    = useState(false)
   const [motivo, setMotivo] = useState('')
+  const [error,   setError]   = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true); setError('')
+    try {
+      const result = await onConfirm(login.trim(), pin, motivo.trim())
+      if (!result.estado) setError(result.mensaje)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al procesar la solicitud')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div style={{ position:'fixed',inset:0,zIndex:300,background:'rgba(10,21,48,.55)',display:'flex',alignItems:'center',justifyContent:'center',padding:20 }}
       onClick={onClose}>
@@ -278,26 +300,57 @@ function DerogacionModal({ firmaInfo, texto, grupo, onConfirm, onClose }: {
             <span style={{ fontSize:11.5,padding:'1px 9px',borderRadius:20,background:'var(--navy)',color:'#fff' }}>{grupo}</span>
           </div>
         </div>
-        <div style={{ padding:'18px 22px' }}>
-          <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:6 }}>
-            Motivo de derogación <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
-          </label>
-          <textarea className="form-control" rows={3} value={motivo} autoFocus
-            onChange={e => setMotivo(e.target.value)}
-            placeholder="Describa el motivo para revocar esta firma…"
-            style={{ resize:'vertical' }} />
-          <div style={{ marginTop:8,fontSize:11.5,color:'#92400E',background:'#FEF3C7',borderRadius:6,padding:'6px 10px',display:'flex',gap:6,alignItems:'flex-start' }}>
-            <i className="fa fa-exclamation-triangle" style={{ color:'#D97706',flexShrink:0,marginTop:1 }}/>
-            <span>Se revocará esta firma. Los campos del formulario quedarán editables para corrección.</span>
+        <form onSubmit={handleSubmit}>
+          <div style={{ padding:'18px 22px',display:'flex',flexDirection:'column',gap:14 }}>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                Usuario <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <input className="form-control" value={login} autoFocus
+                onChange={e => { setLogin(e.target.value); setError('') }}
+                placeholder="login" />
+            </div>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                PIN de firma <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <div style={{ position:'relative' }}>
+                <input type={show ? 'text' : 'password'} inputMode="numeric" className="form-control" value={pin}
+                  onChange={e => { setPin(e.target.value); setError('') }}
+                  placeholder="••••••" style={{ paddingRight:36 }} />
+                <button type="button"
+                  style={{ position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--ink-4)' }}
+                  onClick={() => setShow(s => !s)}>
+                  {show ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:6 }}>
+                Motivo de derogación <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <textarea className="form-control" rows={3} value={motivo}
+                onChange={e => setMotivo(e.target.value)}
+                placeholder="Describa el motivo para revocar esta firma…"
+                style={{ resize:'vertical' }} />
+            </div>
+            <div style={{ fontSize:11.5,color:'#92400E',background:'#FEF3C7',borderRadius:6,padding:'6px 10px',display:'flex',gap:6,alignItems:'flex-start' }}>
+              <i className="fa fa-exclamation-triangle" style={{ color:'#D97706',flexShrink:0,marginTop:1 }}/>
+              <span>Se revocará esta firma. Los campos del formulario quedarán editables para corrección.</span>
+            </div>
+            {error && (
+              <div style={{ padding:'8px 12px',background:'#fef2f2',border:'1.5px solid #fecaca',borderRadius:'var(--r-sm)',fontSize:12.5,color:'#b91c1c',display:'flex',alignItems:'center',gap:7 }}>
+                <i className="fa fa-exclamation-circle" />{error}
+              </div>
+            )}
           </div>
-        </div>
-        <div style={{ padding:'14px 22px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
-          <button className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
-          <button className="btn btn-danger" disabled={!motivo.trim()}
-            onClick={() => { if (motivo.trim()) onConfirm(motivo.trim()) }}>
-            <i className="fa fa-undo" /> Derogar firma
-          </button>
-        </div>
+          <div style={{ padding:'14px 22px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
+            <button type="button" className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
+            <button type="submit" className="btn btn-danger" disabled={!login || !pin || !motivo.trim() || loading}>
+              {loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-undo" /> Derogar firma</>}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )
@@ -1549,15 +1602,16 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
     setDesviaciones(desvs)
   }
 
-  const handleDerogar = async (motivo: string) => {
-    if (!derogTarget) return
+  const handleDerogar = async (login: string, pin: string, motivo: string) => {
+    if (!derogTarget) return { estado: false, mensaje: 'No hay una firma seleccionada' }
     // El backend ya registra DEROGAR_FIRMA de forma atómica dentro de la misma transacción
     // (POST /batch-records/:id/firmas/:idFirmaRegistro/derogar) — no duplicar aquí.
-    const res = await batchRecordApi.derogarFirma(idNum, derogTarget.firmaInfo.idRegistro, motivo)
+    const res = await batchRecordApi.derogarFirma(idNum, derogTarget.firmaInfo.idRegistro, login, pin, motivo)
     if (res.estado) {
       await cargarTodo()
+      setDerogTarget(null)
     }
-    setDerogTarget(null)
+    return res
   }
 
   const detallesProceso = detalleStruct.filter(d => d.idProceso === procesoActivo)

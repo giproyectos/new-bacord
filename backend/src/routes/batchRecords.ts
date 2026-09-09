@@ -249,7 +249,7 @@ batchRecordsRouter.post(
   })
 )
 
-const derogarSchema = z.object({ motivo: z.string().min(1) })
+const derogarSchema = z.object({ login: z.string().min(1), pin: z.string().min(1), motivo: z.string().min(1) })
 
 batchRecordsRouter.post(
   '/:id/firmas/:idFirmaRegistro/derogar',
@@ -257,6 +257,7 @@ batchRecordsRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = derogarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    const { login, pin, motivo } = parsed.data
     const idBatchRecord = Number(req.params.id)
     const idFirmaRegistro = Number(req.params.idFirmaRegistro)
 
@@ -273,10 +274,17 @@ batchRecordsRouter.post(
     if (!registro || registro.idBatchRecord !== idBatchRecord) throw new NotFoundError('Firma no encontrada')
 
     const detalle = await prisma.detalle.findUniqueOrThrow({ where: { id: registro.idDetalle } })
-    const solicitante = await prisma.usuario.findUniqueOrThrow({
-      where: { idUsuario: req.auth!.idUsuario },
-      include: { grupos: { include: { grupo: true } } },
-    })
+
+    // Derogar revoca evidencia de firma — exige re-autenticación explícita con PIN, igual que
+    // firmar o liberar, en vez de confiar en que la sesión del navegador siga siendo de la
+    // misma persona (riesgo real en un equipo compartido en planta).
+    const solicitante = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
+    if (!solicitante || !solicitante.activo || solicitante.bloqueado) {
+      return res.json({ estado: false, mensaje: 'Usuario no válido para derogar' })
+    }
+    const pinCheck = await verificarPin(prisma, solicitante, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
+
     if (!solicitante.esAdministrador) {
       const idEstrategia = registro.bloqueKey
         ? findFirmaSeccionEstrategia(detalle.jsonSchema, registro.bloqueKey)
@@ -297,8 +305,8 @@ batchRecordsRouter.post(
       await logAudit(tx, {
         entidad: registro.bloqueKey ? 'FirmaSeccion' : 'FirmaCierre', idEntidad: idBatchRecord,
         descripcionEntidad: `BR-${idBatchRecord} · ${detalle.descripcion}`,
-        accion: 'DEROGAR_FIRMA', modulo: 'batch-record', motivo: parsed.data.motivo,
-        actor: await actorDe(tx, req.auth!.idUsuario),
+        accion: 'DEROGAR_FIRMA', modulo: 'batch-record', motivo,
+        actor: await actorDe(tx, solicitante.idUsuario),
       })
     })
 
