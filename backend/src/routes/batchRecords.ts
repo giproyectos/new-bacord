@@ -262,6 +262,12 @@ batchRecordsRouter.post(
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
     if (!br) throw new NotFoundError('Batch Record no encontrado')
+    // A diferencia de Finalizado (2) — que sí se puede reabrir derogando su firma de cierre,
+    // más abajo —, Cancelado (3) y Liberado (4) son estados terminales: derogar ahí borraría
+    // evidencia de un lote ya cerrado o ya liberado al mercado, sin forma de dejarlo consistente.
+    if (br.idEstado === 3 || br.idEstado === 4) {
+      throw new ConflictError('No se puede derogar una firma de un Batch Record cancelado o liberado')
+    }
 
     const registro = await prisma.batchRecordFirma.findUnique({ where: { id: idFirmaRegistro } })
     if (!registro || registro.idBatchRecord !== idBatchRecord) throw new NotFoundError('Firma no encontrada')
