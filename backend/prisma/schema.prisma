@@ -80,6 +80,9 @@ model Usuario {
   /// Token de un solo uso para activar la cuenta o restablecer la contraseña por correo.
   tokenActivacion      String?   @unique
   tokenActivacionExpira DateTime?
+  /// Fecha en que se definió la contraseña actual — nula para cuentas creadas antes de este
+  /// campo. Se usa para exigir su renovación por antigüedad (parámetro `password_rotacion_dias`).
+  passwordCambiadaEn   DateTime?
 
   /// PIN de firma electrónica — secreto corto, independiente de la contraseña de acceso (o del
   /// futuro login OIDC), usado únicamente para confirmar el acto de firmar/liberar un lote.

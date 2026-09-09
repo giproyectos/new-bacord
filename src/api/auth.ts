@@ -4,13 +4,28 @@ import type { AuthUser, Resultado } from '@/types'
 /** URL base de la API sin el sufijo `/api` — para navegaciones de página completa (no XHR). */
 const apiOrigin = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/api\/?$/, '')
 
+export interface PoliticaPassword {
+  minCaracteres: number
+  requiereMayuscula: boolean
+  requiereMinuscula: boolean
+  requiereEspecial: boolean
+}
+
+export interface AuthConfig {
+  oidcEnabled: boolean
+  oidcLabel: string
+  passwordPolitica: PoliticaPassword
+}
+
 export const authApi = {
   login: async (login: string, clave: string): Promise<AuthUser> => {
     const { data } = await http.post<AuthUser>('/auth/login', { login, clave })
     return data
   },
-  config: async (): Promise<{ oidcEnabled: boolean; oidcLabel: string }> =>
-    (await http.get<{ oidcEnabled: boolean; oidcLabel: string }>('/auth/config')).data,
+  config: async (): Promise<AuthConfig> =>
+    (await http.get<AuthConfig>('/auth/config')).data,
+  sesionConfig: async (): Promise<{ inactividadMinutos: number }> =>
+    (await http.get<{ inactividadMinutos: number }>('/auth/sesion-config')).data,
   /** No es una llamada XHR — el navegador debe navegar de verdad a esta URL para que el
    * proveedor OIDC pueda hacer sus propias redirecciones. */
   oidcLoginUrl: (): string => `${apiOrigin}/api/auth/oidc/login`,

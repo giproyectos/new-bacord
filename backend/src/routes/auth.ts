@@ -9,6 +9,7 @@ import { cargoDeGrupos, logAudit } from '../services/audit.js'
 import { MODULO_CLAVES } from '../constants/modulos.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
 import { verificarPin } from '../services/pin.js'
+import { getParametroNumero, getPoliticaPassword, validarPassword } from '../services/parametros.js'
 import * as oidc from '../services/oidc.js'
 
 export const authRouter = Router()
@@ -139,6 +140,22 @@ authRouter.post(
       await prisma.usuario.update({ where: { idUsuario: usuario.idUsuario }, data: { intentosFallidos: 0 } })
     }
 
+    // Rotación de contraseña por antigüedad — parámetro `password_rotacion_dias` (configurable
+    // por cliente, valor por defecto 60). Cuentas sin `passwordCambiadaEn` (creadas antes de este
+    // control, o cuya contraseña nunca fue rotada) no se fuerzan retroactivamente.
+    if (usuario.passwordCambiadaEn) {
+      const rotacionDias = await getParametroNumero(prisma, 'password_rotacion_dias', 60)
+      const limite = new Date(usuario.passwordCambiadaEn.getTime() + rotacionDias * 24 * 60 * 60 * 1000)
+      if (limite < new Date()) {
+        await generarYEnviarInvitacion(usuario.idUsuario, usuario.email, usuario.nombres, true)
+        await logAudit(prisma, {
+          entidad: 'Sesion', idEntidad: usuario.idUsuario, descripcionEntidad: `Intento de acceso fallido — usuario: "${login}"`,
+          accion: 'LOGIN_FALLIDO', modulo: 'autenticacion', motivo: 'Contraseña vencida por antigüedad', actor,
+        })
+        throw new UnauthorizedError('Su contraseña venció por antigüedad. Se envió un enlace a su correo para definir una nueva.')
+      }
+    }
+
     await logAudit(prisma, {
       entidad: 'Sesion', idEntidad: usuario.idUsuario, descripcionEntidad: `Inicio de sesión exitoso — ${usuario.login}`,
       accion: 'LOGIN', modulo: 'autenticacion', actor,
@@ -161,12 +178,26 @@ authRouter.post(
 
 authRouter.get(
   '/config',
-  (_req, res) => {
+  asyncHandler(async (_req, res) => {
     res.json({
       oidcEnabled: oidc.isOidcConfigured(),
       oidcLabel: process.env.OIDC_LABEL || 'tu cuenta corporativa',
+      passwordPolitica: await getPoliticaPassword(prisma),
     })
-  }
+  })
+)
+
+// Configuración de sesión visible para cualquier usuario autenticado (no depende del módulo
+// `parametros`, que solo pueden leer los administradores) — el frontend la usa para saber
+// cuántos minutos de inactividad esperar antes del bloqueo automático (parámetro
+// `sesion_inactividad_minutos`, configurable por cliente, 5 minutos por defecto).
+authRouter.get(
+  '/sesion-config',
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    const inactividadMinutos = await getParametroNumero(prisma, 'sesion_inactividad_minutos', 5)
+    res.json({ inactividadMinutos })
+  })
 )
 
 type OidcState = { cv: string }
@@ -354,7 +385,7 @@ authRouter.get(
 
 const activarCuentaSchema = z.object({
   token: z.string().min(1),
-  password: z.string().min(6),
+  password: z.string().min(1),
 })
 
 authRouter.post(
@@ -369,10 +400,17 @@ authRouter.post(
       return res.json({ estado: false, mensaje: 'El enlace es inválido o venció. Solicite uno nuevo al administrador.' })
     }
 
+    const politica = await getPoliticaPassword(prisma)
+    const errorPassword = validarPassword(password, politica)
+    if (errorPassword) return res.json({ estado: false, mensaje: errorPassword })
+
     const passwordHash = await bcrypt.hash(password, 12)
     await prisma.usuario.update({
       where: { idUsuario: usuario.idUsuario },
-      data: { passwordHash, tokenActivacion: null, tokenActivacionExpira: null, bloqueado: false, intentosFallidos: 0 },
+      data: {
+        passwordHash, passwordCambiadaEn: new Date(),
+        tokenActivacion: null, tokenActivacionExpira: null, bloqueado: false, intentosFallidos: 0,
+      },
     })
     await logAudit(prisma, {
       entidad: 'Sesion', idEntidad: usuario.idUsuario, descripcionEntidad: `Cuenta activada — ${usuario.login}`,

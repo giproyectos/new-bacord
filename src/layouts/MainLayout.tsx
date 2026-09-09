@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronRight, User, LogOut, Menu, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useAudit } from '@/hooks/useAudit'
+import { useInactividad } from '@/hooks/useInactividad'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 // `modulo` referencia una clave de @/constants/modulos. Un leaf sin `modulo` es exclusivo
@@ -42,9 +43,9 @@ const NAV_ALL: NavItem[] = [
         ],
       },
       { label: 'Procesos',            icon: 'fa-cogs',      to: '/administracion/procesos', modulo: 'procesos' },
-      // 'Parámetros' oculto de la navegación: catálogo huérfano, sin ninguna relación ni
-      // consumidor en el resto del sistema (investigado y confirmado) — no se eliminó el
-      // código/ruta/tabla por si en el futuro se necesita una tabla real de configuración.
+      // Antes oculto por ser un catálogo huérfano — ahora sostiene la sesión de inactividad y
+      // la política de contraseña (rotación y complejidad), configurables por cliente.
+      { label: 'Parámetros',          icon: 'fa-sliders-h', to: '/administracion/parametros', modulo: 'parametros' },
     ],
   },
   {
@@ -219,6 +220,7 @@ export function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { registrar } = useAudit()
+  useInactividad()
 
   const isAdmin = !!user?.esAdministrador
   const modulos = user?.modulos ?? []
