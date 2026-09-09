@@ -169,11 +169,28 @@ describe('POST /api/batch-records/:id/cancelar', () => {
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Defecto detectado durante producción' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Defecto detectado durante producción' })
 
     expect(res.status).toBe(200)
     const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
     expect(br.idEstado).toBe(3) // 3 = Cancelado
+  })
+
+  it('rechaza un PIN incorrecto y no cancela el BR', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: '000000', motivo: 'Intento con PIN incorrecto' })
+
+    expect(res.status).toBe(200) // igual que firmar: responde 200 con estado:false, no un error HTTP
+    expect(res.body.estado).toBe(false)
+    expect(res.body.mensaje).toMatch(/PIN incorrecto/i)
+
+    const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(br.idEstado).toBe(1) // sigue En proceso
   })
 
   it('rechaza cancelar un BR ya Liberado', async () => {
@@ -192,7 +209,7 @@ describe('POST /api/batch-records/:id/cancelar', () => {
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Intento indebido tras liberar' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Intento indebido tras liberar' })
 
     expect(res.status).toBe(409)
     const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
@@ -206,12 +223,12 @@ describe('POST /api/batch-records/:id/cancelar', () => {
     await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Primera cancelación' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Primera cancelación' })
 
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Segundo intento' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Segundo intento' })
 
     expect(res.status).toBe(409)
   })
@@ -345,7 +362,7 @@ describe('POST /api/batch-records/:id/firmas/:idFirmaRegistro/derogar', () => {
     await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ motivo: 'Cancelado para la prueba' })
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Cancelado para la prueba' })
 
     const res = await request(app)
       .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas/${firmar.body.datos.id}/derogar`)

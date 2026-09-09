@@ -107,8 +107,8 @@ export const batchRecordApi = {
   liberar: async (idBatchRecord: number, login: string, pin: string, observacion?: string): Promise<Resultado<BatchRecordLiberacionInfo>> =>
     (await http.post<Resultado<BatchRecordLiberacionInfo>>(`/batch-records/${idBatchRecord}/liberar`, { login, pin, observacion })).data,
 
-  cancelar: async (idBatchRecord: number, motivo: string): Promise<Resultado> =>
-    (await http.post<Resultado>(`/batch-records/${idBatchRecord}/cancelar`, { motivo })).data,
+  cancelar: async (idBatchRecord: number, login: string, pin: string, motivo: string): Promise<Resultado> =>
+    (await http.post<Resultado>(`/batch-records/${idBatchRecord}/cancelar`, { login, pin, motivo })).data,
 
   // Compatibilidad: el flujo de firma en pantalla valida el PIN de firma del firmante antes de registrarla.
   validarFirma: (login: string, pin: string) => authApi.validarFirma(login, pin),

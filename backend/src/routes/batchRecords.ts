@@ -382,7 +382,7 @@ batchRecordsRouter.post(
   })
 )
 
-const cancelarSchema = z.object({ motivo: z.string().min(1) })
+const cancelarSchema = z.object({ login: z.string().min(1), pin: z.string().min(1), motivo: z.string().min(1) })
 
 batchRecordsRouter.post(
   '/:id/cancelar',
@@ -390,6 +390,7 @@ batchRecordsRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = cancelarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    const { login, pin, motivo } = parsed.data
     const idBatchRecord = Number(req.params.id)
 
     const actual = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
@@ -401,14 +402,23 @@ batchRecordsRouter.post(
       throw new ConflictError('No se puede cancelar un Batch Record ya cancelado o liberado')
     }
 
+    // Cancelar un lote es un evento crítico GMP — exige re-autenticación explícita con PIN,
+    // igual que firmar, liberar o derogar una firma.
+    const solicitante = await prisma.usuario.findUnique({ where: { login } })
+    if (!solicitante || !solicitante.activo || solicitante.bloqueado) {
+      return res.json({ estado: false, mensaje: 'Usuario no válido para cancelar' })
+    }
+    const pinCheck = await verificarPin(prisma, solicitante, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
+
     const br = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.batchRecord.update({
         where: { idBatchRecord },
-        data: { idEstado: 3, motivoEstado: parsed.data.motivo, idUsuarioModificacion: req.auth!.idUsuario },
+        data: { idEstado: 3, motivoEstado: motivo, idUsuarioModificacion: solicitante.idUsuario },
       })
       await logAudit(tx, {
         entidad: 'BatchRecord', idEntidad: idBatchRecord, descripcionEntidad: `BR-${idBatchRecord}`,
-        accion: 'CANCELAR', modulo: 'batch-record', motivo: parsed.data.motivo, actor: await actorDe(tx, req.auth!.idUsuario),
+        accion: 'CANCELAR', modulo: 'batch-record', motivo, actor: await actorDe(tx, solicitante.idUsuario),
       })
       return actualizado
     })
