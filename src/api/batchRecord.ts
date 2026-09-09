@@ -98,8 +98,8 @@ export const batchRecordApi = {
   firmar: async (idBatchRecord: number, idDetalle: number, idFirma: number, login: string, pin: string, bloqueKey = '') =>
     (await http.post<Resultado<BatchRecordFirmaRegistrada>>(`/batch-records/${idBatchRecord}/firmas`, { idDetalle, idFirma, login, pin, bloqueKey })).data,
 
-  derogarFirma: async (idBatchRecord: number, idFirmaRegistro: number, motivo: string): Promise<Resultado> =>
-    (await http.post<Resultado>(`/batch-records/${idBatchRecord}/firmas/${idFirmaRegistro}/derogar`, { motivo })).data,
+  derogarFirma: async (idBatchRecord: number, idFirmaRegistro: number, login: string, pin: string, motivo: string): Promise<Resultado> =>
+    (await http.post<Resultado>(`/batch-records/${idBatchRecord}/firmas/${idFirmaRegistro}/derogar`, { login, pin, motivo })).data,
 
   getLiberacion: async (idBatchRecord: number): Promise<BatchRecordLiberacionInfo | null> =>
     (await http.get<BatchRecordLiberacionInfo | null>(`/batch-records/${idBatchRecord}/liberacion`)).data,

@@ -5,7 +5,7 @@ import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { getEstructuraProcesos, recomputePorcentajeAvance } from '../services/batchRecordProgress.js'
-import { logAudit, actorDe } from '../services/audit.js'
+import { logAudit, actorDe, type AuditCambio } from '../services/audit.js'
 import { findFirmaSeccionEstrategia } from '../services/formioSchema.js'
 import { verificarPin } from '../services/pin.js'
 
@@ -249,7 +249,7 @@ batchRecordsRouter.post(
   })
 )
 
-const derogarSchema = z.object({ motivo: z.string().min(1) })
+const derogarSchema = z.object({ login: z.string().min(1), pin: z.string().min(1), motivo: z.string().min(1) })
 
 batchRecordsRouter.post(
   '/:id/firmas/:idFirmaRegistro/derogar',
@@ -257,20 +257,37 @@ batchRecordsRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = derogarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    const { login, pin, motivo } = parsed.data
     const idBatchRecord = Number(req.params.id)
     const idFirmaRegistro = Number(req.params.idFirmaRegistro)
 
     const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
     if (!br) throw new NotFoundError('Batch Record no encontrado')
+    // A diferencia de Finalizado (2) — que sí se puede reabrir derogando su firma de cierre,
+    // más abajo —, Cancelado (3) y Liberado (4) son estados terminales: derogar ahí borraría
+    // evidencia de un lote ya cerrado o ya liberado al mercado, sin forma de dejarlo consistente.
+    if (br.idEstado === 3 || br.idEstado === 4) {
+      throw new ConflictError('No se puede derogar una firma de un Batch Record cancelado o liberado')
+    }
 
-    const registro = await prisma.batchRecordFirma.findUnique({ where: { id: idFirmaRegistro } })
+    const registro = await prisma.batchRecordFirma.findUnique({
+      where: { id: idFirmaRegistro },
+      include: { usuario: true, firma: true },
+    })
     if (!registro || registro.idBatchRecord !== idBatchRecord) throw new NotFoundError('Firma no encontrada')
 
     const detalle = await prisma.detalle.findUniqueOrThrow({ where: { id: registro.idDetalle } })
-    const solicitante = await prisma.usuario.findUniqueOrThrow({
-      where: { idUsuario: req.auth!.idUsuario },
-      include: { grupos: { include: { grupo: true } } },
-    })
+
+    // Derogar revoca evidencia de firma — exige re-autenticación explícita con PIN, igual que
+    // firmar o liberar, en vez de confiar en que la sesión del navegador siga siendo de la
+    // misma persona (riesgo real en un equipo compartido en planta).
+    const solicitante = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
+    if (!solicitante || !solicitante.activo || solicitante.bloqueado) {
+      return res.json({ estado: false, mensaje: 'Usuario no válido para derogar' })
+    }
+    const pinCheck = await verificarPin(prisma, solicitante, pin)
+    if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
+
     if (!solicitante.esAdministrador) {
       const idEstrategia = registro.bloqueKey
         ? findFirmaSeccionEstrategia(detalle.jsonSchema, registro.bloqueKey)
@@ -280,6 +297,19 @@ batchRecordsRouter.post(
       const puedeDerogar = solicitante.grupos.some((g) => gruposDerogacion.includes(g.grupo.nombre))
       if (!puedeDerogar) throw new ForbiddenError('No tiene permisos para derogar esta firma')
     }
+
+    // El registro se borra físicamente de BatchRecordFirma — este snapshot queda en el propio
+    // evento de auditoría para que sea autosuficiente (quién firmó, qué firma y cuándo) sin
+    // depender de cruzarlo con el evento FIRMAR_SECCION/FIRMAR_CIERRE original.
+    const cambios: AuditCambio[] = [
+      {
+        campo: 'firmante', etiqueta: 'Firmada por',
+        valorAnterior: `${registro.usuario.nombres} ${registro.usuario.apellidos} (${registro.usuario.login})`,
+        valorNuevo: '',
+      },
+      { campo: 'firmadoEn', etiqueta: 'Firmada el', valorAnterior: registro.firmadoEn.toISOString(), valorNuevo: '' },
+      { campo: 'firma', etiqueta: 'Firma revocada', valorAnterior: `${registro.firma.codigo} — ${registro.firma.descripcion}`, valorNuevo: '' },
+    ]
 
     await prisma.$transaction(async (tx) => {
       await tx.batchRecordFirma.delete({ where: { id: idFirmaRegistro } })
@@ -291,8 +321,8 @@ batchRecordsRouter.post(
       await logAudit(tx, {
         entidad: registro.bloqueKey ? 'FirmaSeccion' : 'FirmaCierre', idEntidad: idBatchRecord,
         descripcionEntidad: `BR-${idBatchRecord} · ${detalle.descripcion}`,
-        accion: 'DEROGAR_FIRMA', modulo: 'batch-record', motivo: parsed.data.motivo,
-        actor: await actorDe(tx, req.auth!.idUsuario),
+        accion: 'DEROGAR_FIRMA', modulo: 'batch-record', motivo, cambios,
+        actor: await actorDe(tx, solicitante.idUsuario),
       })
     })
 
