@@ -184,6 +184,29 @@ describe('POST /api/batch-records/:id/firmas/:idFirmaRegistro/derogar', () => {
     expect(br.idEstado).toBe(1) // reabierto
   })
 
+  it('deja un snapshot de quién firmó, cuándo y qué firma se revocó en el propio evento de auditoría', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const firmar = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas/${firmar.body.datos.id}/derogar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO, motivo: 'Error de digitación, corrigiendo el valor' })
+
+    const evento = await prisma.auditEntry.findFirstOrThrow({ where: { accion: 'DEROGAR_FIRMA' } })
+    const cambios = JSON.parse(evento.cambios ?? '[]')
+    expect(cambios).toEqual(expect.arrayContaining([
+      expect.objectContaining({ campo: 'firmante', valorAnterior: expect.stringContaining(esc.usuarioAdmin.login) }),
+      expect.objectContaining({ campo: 'firmadoEn' }),
+      expect.objectContaining({ campo: 'firma', valorAnterior: expect.stringContaining(esc.firma.codigo) }),
+    ]))
+  })
+
   it('rechaza un PIN incorrecto y no borra la firma', async () => {
     const esc = await crearEscenarioBasico()
     const token = tokenPara(esc.usuarioAdmin)
