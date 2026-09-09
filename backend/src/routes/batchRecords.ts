@@ -392,6 +392,15 @@ batchRecordsRouter.post(
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const idBatchRecord = Number(req.params.id)
 
+    const actual = await prisma.batchRecord.findUnique({ where: { idBatchRecord } })
+    if (!actual) throw new NotFoundError('Batch Record no encontrado')
+    // Cancelado (3) ya está en el estado que se pediría — y Liberado (4) es un estado terminal:
+    // el lote ya fue aprobado y distribuido, cancelarlo después borraría esa aprobación sin dejar
+    // ningún rastro de que existió (a diferencia de un recall formal, que es un proceso aparte).
+    if (actual.idEstado === 3 || actual.idEstado === 4) {
+      throw new ConflictError('No se puede cancelar un Batch Record ya cancelado o liberado')
+    }
+
     const br = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.batchRecord.update({
         where: { idBatchRecord },
