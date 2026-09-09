@@ -24,8 +24,10 @@ export function LoginPage() {
 
   useEffect(() => {
     authApi.config().then(setOidc).catch(() => setOidc({ oidcEnabled: false, oidcLabel: '' }))
-    const oidcError = new URLSearchParams(window.location.search).get('oidcError')
+    const params = new URLSearchParams(window.location.search)
+    const oidcError = params.get('oidcError')
     if (oidcError) setError(OIDC_ERROR_MENSAJES[oidcError] ?? 'No se pudo iniciar sesión con el proveedor de identidad.')
+    else if (params.get('motivo') === 'inactividad') setError('Su sesión se cerró automáticamente por inactividad.')
   }, [])
 
   const cerrarRecuperar = () => { setShowRecuperar(false); setEmail(''); setRecuperarMensaje('') }

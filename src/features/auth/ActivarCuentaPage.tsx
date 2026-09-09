@@ -27,7 +27,10 @@ export function ActivarCuentaPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
+    if (password.length < 8) { setError('La contraseña debe tener al menos 8 caracteres'); return }
+    if (!/[a-z]/.test(password)) { setError('La contraseña debe incluir al menos una minúscula'); return }
+    if (!/[A-Z]/.test(password)) { setError('La contraseña debe incluir al menos una mayúscula'); return }
+    if (!/[^A-Za-z0-9]/.test(password)) { setError('La contraseña debe incluir al menos un carácter especial'); return }
     if (password !== confirmar) { setError('Las contraseñas no coinciden'); return }
     setLoading(true)
     try {
@@ -85,6 +88,9 @@ export function ActivarCuentaPage() {
                     type="password" className="form-control" placeholder="Nueva contraseña"
                     value={password} onChange={e => setPassword(e.target.value)} autoFocus autoComplete="new-password"
                   />
+                  <small style={{ display: 'block', marginTop: 6, color: 'var(--ink-3)', fontSize: 12 }}>
+                    Mínimo 8 caracteres, con mayúscula, minúscula y un carácter especial.
+                  </small>
                 </div>
                 <div className="form-group">
                   <input

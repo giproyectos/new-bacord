@@ -22,7 +22,29 @@ async function main() {
       login,
       email: `${login}@bacord.local`,
       passwordHash,
+      passwordCambiadaEn: new Date(),
       esAdministrador: true,
+    },
+  })
+
+  // Parámetros de sesión/contraseña — configurables por cliente desde el módulo Parámetros.
+  // Se crean solo si no existen, para no pisar un valor que el cliente ya haya ajustado.
+  await prisma.parametro.upsert({
+    where: { nombre: 'sesion_inactividad_minutos' },
+    update: {},
+    create: {
+      nombre: 'sesion_inactividad_minutos',
+      valor: '5',
+      descripcion: 'Minutos de inactividad antes del bloqueo automático de sesión.',
+    },
+  })
+  await prisma.parametro.upsert({
+    where: { nombre: 'password_rotacion_dias' },
+    update: {},
+    create: {
+      nombre: 'password_rotacion_dias',
+      valor: '60',
+      descripcion: 'Días que puede vivir una contraseña antes de exigir su renovación.',
     },
   })
 

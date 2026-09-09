@@ -11,6 +11,8 @@ export const authApi = {
   },
   config: async (): Promise<{ oidcEnabled: boolean; oidcLabel: string }> =>
     (await http.get<{ oidcEnabled: boolean; oidcLabel: string }>('/auth/config')).data,
+  sesionConfig: async (): Promise<{ inactividadMinutos: number }> =>
+    (await http.get<{ inactividadMinutos: number }>('/auth/sesion-config')).data,
   /** No es una llamada XHR — el navegador debe navegar de verdad a esta URL para que el
    * proveedor OIDC pueda hacer sus propias redirecciones. */
   oidcLoginUrl: (): string => `${apiOrigin}/api/auth/oidc/login`,

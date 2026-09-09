@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronRight, User, LogOut, Menu, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useAudit } from '@/hooks/useAudit'
+import { useInactividad } from '@/hooks/useInactividad'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 // `modulo` referencia una clave de @/constants/modulos. Un leaf sin `modulo` es exclusivo
@@ -219,6 +220,7 @@ export function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { registrar } = useAudit()
+  useInactividad()
 
   const isAdmin = !!user?.esAdministrador
   const modulos = user?.modulos ?? []
