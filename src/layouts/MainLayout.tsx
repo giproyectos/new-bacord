@@ -43,9 +43,9 @@ const NAV_ALL: NavItem[] = [
         ],
       },
       { label: 'Procesos',            icon: 'fa-cogs',      to: '/administracion/procesos', modulo: 'procesos' },
-      // 'Parámetros' oculto de la navegación: catálogo huérfano, sin ninguna relación ni
-      // consumidor en el resto del sistema (investigado y confirmado) — no se eliminó el
-      // código/ruta/tabla por si en el futuro se necesita una tabla real de configuración.
+      // Antes oculto por ser un catálogo huérfano — ahora sostiene la sesión de inactividad y
+      // la política de contraseña (rotación y complejidad), configurables por cliente.
+      { label: 'Parámetros',          icon: 'fa-sliders-h', to: '/administracion/parametros', modulo: 'parametros' },
     ],
   },
   {
