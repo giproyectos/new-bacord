@@ -27,6 +27,6 @@ export const desviacionesApi = {
     idBatchRecord: number; idDetalle: number; campo: string; labelCampo: string
     valorIngresado: string; limiteInfo: string; descripcion: string
   }): Promise<Resultado<Desviacion>> => (await http.post<Resultado<Desviacion>>('/desviaciones', data)).data,
-  cerrar: async (id: number, observacionCierre: string): Promise<Resultado<Desviacion>> =>
-    (await http.post<Resultado<Desviacion>>(`/desviaciones/${id}/cerrar`, { observacionCierre })).data,
+  cerrar: async (id: number, login: string, pin: string, observacionCierre: string): Promise<Resultado<Desviacion>> =>
+    (await http.post<Resultado<Desviacion>>(`/desviaciones/${id}/cerrar`, { login, pin, observacionCierre })).data,
 }

@@ -224,6 +224,33 @@ describe('POST /api/batch-records/:id/liberar', () => {
     const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
     expect(br.idEstado).toBe(4) // 4 = Liberado
   })
+
+  it('rechaza liberar mientras el BR tenga desviaciones abiertas', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+    await request(app)
+      .post('/api/desviaciones')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle: esc.procesos[0].idDetalle,
+        campo: 'peso', labelCampo: 'Peso', valorIngresado: '999', limiteInfo: 'Máximo 100',
+        descripcion: 'Justificación de la desviación',
+      })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/liberar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    expect(res.status).toBe(409)
+    const br = await prisma.batchRecord.findUniqueOrThrow({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(br.idEstado).toBe(2) // sigue Finalizado, no Liberado
+  })
 })
 
 describe('POST /api/batch-records/:id/cancelar', () => {

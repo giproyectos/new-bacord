@@ -28,6 +28,17 @@ export async function getParametroBooleano(
   return parametro.valor.trim().toLowerCase() === 'true'
 }
 
+/** Lee un `Parametro` como CSV de nombres de Grupo Responsable (p. ej. gruposDerogacion). */
+export async function getParametroGrupos(
+  prisma: PrismaClient,
+  nombre: string,
+  valorPorDefecto: string
+): Promise<string[]> {
+  const parametro = await prisma.parametro.findUnique({ where: { nombre } })
+  const valor = parametro?.valor ?? valorPorDefecto
+  return valor.split(',').map((g) => g.trim()).filter(Boolean)
+}
+
 export interface PoliticaPassword {
   minCaracteres: number
   requiereMayuscula: boolean

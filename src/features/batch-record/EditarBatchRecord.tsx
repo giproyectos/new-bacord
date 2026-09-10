@@ -356,6 +356,107 @@ function DerogacionModal({ firmaInfo, texto, grupo, onConfirm, onClose }: {
   )
 }
 
+// ── CerrarDesviacionModal ───────────────────────────────────────────────────
+// Cerrar una desviación es una decisión de calidad — exige la misma re-autenticación con PIN
+// que firmar, liberar, cancelar o derogar una firma. Quién puede hacerlo lo valida el backend
+// contra el parámetro configurable `desviaciones_grupo_cierre`.
+function CerrarDesviacionModal({ desviacion, onConfirm, onClose }: {
+  desviacion: Desviacion
+  onConfirm: (login: string, pin: string, observacionCierre: string) => Promise<{ estado: boolean; mensaje: string }>
+  onClose: () => void
+}) {
+  const sessionUser = useAuthStore(s => s.user)
+  const [login,   setLogin]   = useState(sessionUser?.login ?? '')
+  const [pin,     setPin]     = useState('')
+  const [show,    setShow]    = useState(false)
+  const [observacion, setObservacion] = useState('')
+  const [error,   setError]   = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true); setError('')
+    try {
+      const result = await onConfirm(login.trim(), pin, observacion.trim())
+      if (!result.estado) setError(result.mensaje)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al procesar la solicitud')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ position:'fixed',inset:0,zIndex:300,background:'rgba(10,21,48,.55)',display:'flex',alignItems:'center',justifyContent:'center',padding:20 }}
+      onClick={onClose}>
+      <div style={{ background:'var(--paper)',borderRadius:'var(--r-xl)',boxShadow:'var(--sh-3)',width:'100%',maxWidth:440 }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ background:'#065F46',borderRadius:'var(--r-xl) var(--r-xl) 0 0',padding:'14px 22px',display:'flex',alignItems:'center',gap:10 }}>
+          <div style={{ width:34,height:34,borderRadius:10,background:'rgba(255,255,255,.12)',display:'grid',placeItems:'center',flexShrink:0 }}>
+            <i className="fa fa-check-circle" style={{ color:'#6EE7B7',fontSize:15 }} />
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ color:'#fff',fontWeight:700,fontSize:14 }}>Cerrar Desviación</div>
+            <div style={{ color:'rgba(200,255,230,.7)',fontSize:11 }}>Disposición de calidad sobre el valor fuera de límite</div>
+          </div>
+          <button style={{ background:'rgba(255,255,255,.1)',border:'none',cursor:'pointer',color:'#fff',width:28,height:28,borderRadius:7,fontSize:16,display:'grid',placeItems:'center' }} onClick={onClose}>×</button>
+        </div>
+        <div style={{ padding:'12px 22px',background:'var(--paper-2)',borderBottom:'1px solid var(--hair)' }}>
+          <div style={{ fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:6 }}>{desviacion.labelCampo}</div>
+          <div style={{ fontSize:11.5,color:'var(--ink-4)' }}>Valor: <strong>{desviacion.valorIngresado}</strong> · {desviacion.limiteInfo}</div>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div style={{ padding:'18px 22px',display:'flex',flexDirection:'column',gap:14 }}>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                Usuario <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <input className="form-control" value={login} autoFocus
+                onChange={e => { setLogin(e.target.value); setError('') }}
+                placeholder="login" />
+            </div>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:5 }}>
+                PIN de firma <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <div style={{ position:'relative' }}>
+                <input type={show ? 'text' : 'password'} inputMode="numeric" className="form-control" value={pin}
+                  onChange={e => { setPin(e.target.value); setError('') }}
+                  placeholder="••••••" style={{ paddingRight:36 }} />
+                <button type="button"
+                  style={{ position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--ink-4)' }}
+                  onClick={() => setShow(s => !s)}>
+                  {show ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label style={{ display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)',marginBottom:6 }}>
+                Observación de cierre <span style={{ color:'#DC2626',fontWeight:400 }}>(requerido)</span>
+              </label>
+              <textarea className="form-control" rows={3} value={observacion}
+                onChange={e => setObservacion(e.target.value)}
+                placeholder="Describa la disposición: por qué se acepta o corrige esta desviación…"
+                style={{ resize:'vertical' }} />
+            </div>
+            {error && (
+              <div style={{ padding:'8px 12px',background:'#fef2f2',border:'1.5px solid #fecaca',borderRadius:'var(--r-sm)',fontSize:12.5,color:'#b91c1c',display:'flex',alignItems:'center',gap:7 }}>
+                <i className="fa fa-exclamation-circle" />{error}
+              </div>
+            )}
+          </div>
+          <div style={{ padding:'14px 22px',borderTop:'1px solid var(--hair)',display:'flex',justifyContent:'flex-end',gap:8 }}>
+            <button type="button" className="btn btn-gray" onClick={onClose}><i className="fa fa-undo" /> Cancelar</button>
+            <button type="submit" className="btn btn-success" disabled={!login || !pin || !observacion.trim() || loading}>
+              {loading ? <><i className="fa fa-spinner fa-spin" /> Validando...</> : <><i className="fa fa-check" /> Cerrar desviación</>}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // ── FirmaModal — captura credenciales y delega la acción real (firmar o liberar) al backend ──
 function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit, onClose }: {
   titulo: string
@@ -725,7 +826,7 @@ function DesviacionModal({ error, valorIngresado, detalleCode, onSubmit, onClose
 }
 
 // ── DetalleCard ───────────────────────────────────────────────────────────
-function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, preLlenado }: {
+function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, onRequestCerrarDesviacion, preLlenado }: {
   detalle: DetalleRow
   readonly: boolean
   firmados: FirmaMap
@@ -736,6 +837,7 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   onFormData?: (detalleId: number, prev: Record<string,unknown>, next: Record<string,unknown>, labels: Record<string,string>) => void
   onRequestDerogar?: (firmaKey: string, detalleId: number, firmaInfo: FirmaInfo, texto: string, grupo: string) => void
   onDesviacion?: (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => void
+  onRequestCerrarDesviacion?: (desviacion: Desviacion) => void
   preLlenado?: PreLlenadoBR | null
 }) {
   const user = useAuthStore(s => s.user)
@@ -989,14 +1091,26 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
                 <div key={d.id} style={{ padding: '10px 14px', borderBottom: i < detDesviaciones.length - 1 ? '1px solid #FEF3C7' : 'none', background: '#fff' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 5 }}>
                     <span style={{ fontSize: 12.5, fontWeight: 700, color: '#78350F' }}>{d.labelCampo}</span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 100, flexShrink: 0,
-                      background: d.estado === 'abierta' ? '#FEF3C7' : '#D1FAE5',
-                      color: d.estado === 'abierta' ? '#D97706' : '#065F46',
-                      textTransform: 'uppercase', letterSpacing: '.04em',
-                    }}>
-                      {d.estado === 'abierta' ? 'Abierta' : 'Cerrada'}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 100,
+                        background: d.estado === 'abierta' ? '#FEF3C7' : '#D1FAE5',
+                        color: d.estado === 'abierta' ? '#D97706' : '#065F46',
+                        textTransform: 'uppercase', letterSpacing: '.04em',
+                      }}>
+                        {d.estado === 'abierta' ? 'Abierta' : 'Cerrada'}
+                      </span>
+                      {d.estado === 'abierta' && onRequestCerrarDesviacion && (
+                        <button title="Cerrar desviación"
+                          style={{
+                            background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 6,
+                            padding: '3px 8px', cursor: 'pointer', color: '#065F46', fontSize: 10.5, fontWeight: 700,
+                          }}
+                          onClick={() => onRequestCerrarDesviacion(d)}>
+                          <i className="fa fa-check" /> Cerrar
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div style={{ fontSize: 11.5, color: '#92400E', marginBottom: 5 }}>
                     Valor: <strong>{d.valorIngresado}</strong> · {d.limiteInfo}
@@ -1554,6 +1668,7 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const [showAudit, setShowAudit] = useState(true)
   const [liberarModal, setLiberarModal] = useState(false)
   const [derogTarget, setDerogTarget] = useState<{ firmaKey: string; detalleId: number; firmaInfo: FirmaInfo; texto: string; grupo: string } | null>(null)
+  const [cerrarDesvTarget, setCerrarDesvTarget] = useState<Desviacion | null>(null)
 
   const brFinalizado = detalleStruct.length > 0 && detalleStruct.every(d => {
     const fc = getFirmasDeEstrategia(d)
@@ -1564,6 +1679,7 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const doneFirmasCierre  = detalleStruct.reduce((n, d) =>
     n + getFirmasDeEstrategia(d).filter(f => !!firmados[`cie:${d.id}:${f.idFirma}`]).length, 0)
   const overallPct = totalFirmasCierre > 0 ? Math.round((doneFirmasCierre / totalFirmasCierre) * 100) : 0
+  const desviacionesAbiertas = desviaciones.filter(d => d.estado === 'abierta').length
 
   const ESTADO_BADGE = {
     1: { label: 'En Tratamiento', bg: 'rgba(59,130,246,0.22)',  color: '#93C5FD' },
@@ -1600,6 +1716,17 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
     await desviacionesApi.crear({ idBatchRecord: idNum, idDetalle: detalleId, campo, labelCampo, valorIngresado, limiteInfo, descripcion })
     const desvs = await desviacionesApi.listar(idNum)
     setDesviaciones(desvs)
+  }
+
+  const handleCerrarDesviacion = async (login: string, pin: string, observacionCierre: string) => {
+    if (!cerrarDesvTarget) return { estado: false, mensaje: 'No hay una desviación seleccionada' }
+    const res = await desviacionesApi.cerrar(cerrarDesvTarget.id, login, pin, observacionCierre)
+    if (res.estado) {
+      const desvs = await desviacionesApi.listar(idNum)
+      setDesviaciones(desvs)
+      setCerrarDesvTarget(null)
+    }
+    return res
   }
 
   const handleDerogar = async (login: string, pin: string, motivo: string) => {
@@ -2298,6 +2425,7 @@ ${procsSections}
                     onRequestDerogar={(fk, detalleId, fi, tx, gr) =>
                       setDerogTarget({ firmaKey: fk, detalleId, firmaInfo: fi, texto: tx, grupo: gr })
                     }
+                    onRequestCerrarDesviacion={setCerrarDesvTarget}
                   />
                 )
               })
@@ -2369,12 +2497,27 @@ ${procsSections}
               ) : (
                 <button
                   className="btn"
-                  style={{ background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 20px', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, fontFamily: 'var(--f-sans)' }}
+                  style={{
+                    background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 20px', fontWeight: 700, fontSize: 12,
+                    cursor: desviacionesAbiertas > 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, fontFamily: 'var(--f-sans)',
+                    opacity: desviacionesAbiertas > 0 ? 0.5 : 1,
+                  }}
+                  disabled={desviacionesAbiertas > 0}
+                  title={desviacionesAbiertas > 0 ? 'Cierre las desviaciones abiertas antes de liberar el lote' : undefined}
                   onClick={() => setLiberarModal(true)}>
                   <i className="fa fa-certificate" /> Liberar Lote
                 </button>
               )}
             </div>
+            {!liberacion && desviacionesAbiertas > 0 && (
+              <div style={{ marginTop: 12, fontSize: 11.5, color: '#92400E', background: '#FEF3C7', borderRadius: 8, padding: '8px 12px', display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+                <i className="fa fa-triangle-exclamation" style={{ color: '#D97706', flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  Este lote tiene {desviacionesAbiertas} desviación{desviacionesAbiertas !== 1 ? 'es' : ''} abierta{desviacionesAbiertas !== 1 ? 's' : ''}.
+                  Deben quedar cerradas (disposición de Calidad) antes de poder liberar el lote.
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -2457,6 +2600,14 @@ ${procsSections}
           grupo={derogTarget.grupo}
           onConfirm={handleDerogar}
           onClose={() => setDerogTarget(null)}
+        />
+      )}
+
+      {cerrarDesvTarget && (
+        <CerrarDesviacionModal
+          desviacion={cerrarDesvTarget}
+          onConfirm={handleCerrarDesviacion}
+          onClose={() => setCerrarDesvTarget(null)}
         />
       )}
     </>

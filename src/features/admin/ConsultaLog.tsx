@@ -11,6 +11,8 @@ const ACCION_CFG: Record<AuditAccion, { label: string; bg: string; color: string
   FIRMAR_CIERRE:  { label: 'Firma Cierre',   bg: '#EDE9FE', color: '#5B21B6', dot: '#7C3AED' },
   DEROGAR_FIRMA:  { label: 'Derogación',     bg: '#FEF3C7', color: '#92400E', dot: '#D97706' },
   LIBERAR_LOTE:   { label: 'Liberación',     bg: '#F0FDF4', color: '#065F46', dot: '#059669' },
+  REGISTRAR_DESVIACION: { label: 'Desviación registrada', bg: '#FEF3C7', color: '#92400E', dot: '#D97706' },
+  CERRAR_DESVIACION:    { label: 'Desviación cerrada',    bg: '#F0FDF4', color: '#065F46', dot: '#059669' },
   LOGIN:          { label: 'Acceso',         bg: '#F1F5F9', color: '#334155', dot: '#64748B' },
   LOGIN_FALLIDO:  { label: 'Acceso fallido', bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
   LOGOUT:         { label: 'Cierre sesión',  bg: '#F1F5F9', color: '#334155', dot: '#64748B' },
@@ -200,7 +202,7 @@ function DetalleModal({ entry, onClose }: { entry: AuditEntry; onClose: () => vo
 }
 
 // ── LogTable ──────────────────────────────────────────────────────────────
-const DATA_ACCIONES:  AuditAccion[] = ['CREAR', 'MODIFICAR', 'CANCELAR', 'FIRMAR_SECCION', 'FIRMAR_CIERRE', 'DEROGAR_FIRMA', 'LIBERAR_LOTE']
+const DATA_ACCIONES:  AuditAccion[] = ['CREAR', 'MODIFICAR', 'CANCELAR', 'FIRMAR_SECCION', 'FIRMAR_CIERRE', 'DEROGAR_FIRMA', 'LIBERAR_LOTE', 'REGISTRAR_DESVIACION', 'CERRAR_DESVIACION']
 const SESION_ACCIONES: AuditAccion[] = ['LOGIN', 'LOGIN_FALLIDO', 'LOGOUT']
 
 const PAGE = 25
