@@ -4,6 +4,7 @@ import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { logAudit, actorDe } from '../services/audit.js'
 
 export const desviacionesRouter = Router()
 
@@ -36,9 +37,21 @@ desviacionesRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = crearSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
-    const desviacion = await prisma.desviacion.create({
-      data: { ...parsed.data, idUsuarioReporta: req.auth!.idUsuario },
-      include,
+    const detalle = await prisma.detalle.findUnique({ where: { id: parsed.data.idDetalle } })
+    if (!detalle) throw new NotFoundError('Detalle no encontrado')
+
+    const desviacion = await prisma.$transaction(async (tx) => {
+      const creada = await tx.desviacion.create({
+        data: { ...parsed.data, idUsuarioReporta: req.auth!.idUsuario },
+        include,
+      })
+      await logAudit(tx, {
+        entidad: 'Desviacion', idEntidad: creada.id,
+        descripcionEntidad: `BR-${parsed.data.idBatchRecord} · ${detalle.descripcion} · ${parsed.data.labelCampo}`,
+        accion: 'REGISTRAR_DESVIACION', modulo: 'batch-record', motivo: parsed.data.descripcion,
+        actor: await actorDe(tx, req.auth!.idUsuario),
+      })
+      return creada
     })
     res.status(201).json({ estado: true, mensaje: 'Desviación registrada', datos: desviacion })
   })
