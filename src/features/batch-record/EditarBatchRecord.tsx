@@ -1679,6 +1679,7 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const doneFirmasCierre  = detalleStruct.reduce((n, d) =>
     n + getFirmasDeEstrategia(d).filter(f => !!firmados[`cie:${d.id}:${f.idFirma}`]).length, 0)
   const overallPct = totalFirmasCierre > 0 ? Math.round((doneFirmasCierre / totalFirmasCierre) * 100) : 0
+  const desviacionesAbiertas = desviaciones.filter(d => d.estado === 'abierta').length
 
   const ESTADO_BADGE = {
     1: { label: 'En Tratamiento', bg: 'rgba(59,130,246,0.22)',  color: '#93C5FD' },
@@ -2496,12 +2497,27 @@ ${procsSections}
               ) : (
                 <button
                   className="btn"
-                  style={{ background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 20px', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, fontFamily: 'var(--f-sans)' }}
+                  style={{
+                    background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 20px', fontWeight: 700, fontSize: 12,
+                    cursor: desviacionesAbiertas > 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, fontFamily: 'var(--f-sans)',
+                    opacity: desviacionesAbiertas > 0 ? 0.5 : 1,
+                  }}
+                  disabled={desviacionesAbiertas > 0}
+                  title={desviacionesAbiertas > 0 ? 'Cierre las desviaciones abiertas antes de liberar el lote' : undefined}
                   onClick={() => setLiberarModal(true)}>
                   <i className="fa fa-certificate" /> Liberar Lote
                 </button>
               )}
             </div>
+            {!liberacion && desviacionesAbiertas > 0 && (
+              <div style={{ marginTop: 12, fontSize: 11.5, color: '#92400E', background: '#FEF3C7', borderRadius: 8, padding: '8px 12px', display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+                <i className="fa fa-triangle-exclamation" style={{ color: '#D97706', flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  Este lote tiene {desviacionesAbiertas} desviación{desviacionesAbiertas !== 1 ? 'es' : ''} abierta{desviacionesAbiertas !== 1 ? 's' : ''}.
+                  Deben quedar cerradas (disposición de Calidad) antes de poder liberar el lote.
+                </span>
+              </div>
+            )}
           </div>
         )}
 

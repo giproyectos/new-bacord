@@ -382,6 +382,11 @@ batchRecordsRouter.post(
     if (!br) throw new NotFoundError('Batch Record no encontrado')
     if (br.idEstado !== 2) throw new ConflictError('El Batch Record debe estar Finalizado (todas las firmas de cierre completas) antes de liberarse')
 
+    const desviacionesAbiertas = await prisma.desviacion.count({ where: { idBatchRecord, estado: 'abierta' } })
+    if (desviacionesAbiertas > 0) {
+      throw new ConflictError('No se puede liberar el lote: tiene desviaciones abiertas sin disponer')
+    }
+
     // Liberar el lote es un evento crítico GMP: exige re-autenticación explícita del firmante, igual que una firma.
     const usuario = await prisma.usuario.findUnique({ where: { login } })
     if (!usuario || !usuario.activo || usuario.bloqueado) {
