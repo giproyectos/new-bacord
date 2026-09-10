@@ -73,8 +73,14 @@ export function ProcesosList() {
     cargar()
   }
 
+  // Los procesos (etapas de manufactura) se definen por producto terminado — igual criterio que
+  // ya aplica RecetaMaestraList al elegir el producto de una receta. Excipientes, principios
+  // activos, empaque y envase son insumos que se consumen en un proceso, no productos que tengan
+  // sus propias etapas.
+  const productos = materiales.filter(m => m.tipo === 'PRODUCTO_TERMINADO')
+
   const q = search.toLowerCase()
-  const materialesFiltrados = materiales.filter(m =>
+  const materialesFiltrados = productos.filter(m =>
     !q || m.descripcion.toLowerCase().includes(q) || m.codigo.toLowerCase().includes(q) ||
     procesos.some(p => p.idMaterial === m.id && (p.descripcion.toLowerCase().includes(q) || p.codigo.toLowerCase().includes(q)))
   )
@@ -167,10 +173,10 @@ export function ProcesosList() {
         </div>
       </div>
 
-      {materiales.length === 0 && (
+      {productos.length === 0 && (
         <div style={{ padding:'48px 20px', textAlign:'center', color:'var(--ink-4)' }}>
           <i className="fa fa-pills" style={{ fontSize:28, display:'block', marginBottom:10, color:'var(--hair-2)' }} />
-          <span style={{ fontSize:13 }}>Primero crea materiales en el catálogo de Materiales — los procesos se definen por producto.</span>
+          <span style={{ fontSize:13 }}>Primero crea un Producto Terminado en el catálogo de Materiales — los procesos se definen por producto.</span>
         </div>
       )}
 
@@ -247,7 +253,7 @@ export function ProcesosList() {
         )
       })}
 
-      {materiales.length > 0 && materialesFiltrados.length === 0 && (
+      {productos.length > 0 && materialesFiltrados.length === 0 && (
         <div style={{ padding:'48px 20px', textAlign:'center', color:'var(--ink-4)' }}>
           <i className="fa fa-search" style={{ fontSize:28, display:'block', marginBottom:10, color:'var(--hair-2)' }} />
           <span style={{ fontSize:13 }}>No se encontraron productos que coincidan con "{search}"</span>
@@ -278,7 +284,7 @@ export function ProcesosList() {
                 <label>Producto <span style={{ color:'var(--orange)' }}>*</span></label>
                 <select value={form.idMaterial} onChange={e => { setForm(v => ({ ...v, idMaterial: e.target.value })); setErr('') }}>
                   <option value="">— Seleccione un producto —</option>
-                  {materiales.map(m => (
+                  {productos.map(m => (
                     <option key={m.id} value={String(m.id)}>{m.descripcion} ({m.codigo})</option>
                   ))}
                 </select>

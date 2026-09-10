@@ -9,3 +9,4 @@ Thumbs.db
 .env
 *.tsbuildinfo
 *.log
+backend/.checkpoints/
