@@ -6,10 +6,10 @@ import { signToken, signState, verifyState, requireAuth } from '../middleware/au
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { NotFoundError, UnauthorizedError, ValidationError } from '../utils/errors.js'
 import { cargoDeGrupos, logAudit } from '../services/audit.js'
-import { MODULO_CLAVES } from '../constants/modulos.js'
 import { generarYEnviarInvitacion } from '../services/invitacion.js'
 import { verificarPin } from '../services/pin.js'
 import { getParametroNumero, getPoliticaPassword, validarPassword } from '../services/parametros.js'
+import { modulosDe, modulosEdicionDe } from '../services/permisos.js'
 import * as oidc from '../services/oidc.js'
 
 export const authRouter = Router()
@@ -20,18 +20,6 @@ const loginSchema = z.object({
 })
 
 type RolAuth = { nombre: string; activo: boolean; modulos: string; modulosEdicion: string | null } | null
-
-function modulosDe(usuario: { esAdministrador: boolean; rol: RolAuth }): string[] {
-  if (usuario.esAdministrador) return [...MODULO_CLAVES]
-  if (!usuario.rol || !usuario.rol.activo) return []
-  return usuario.rol.modulos.split(',').map((s) => s.trim()).filter(Boolean)
-}
-
-function modulosEdicionDe(usuario: { esAdministrador: boolean; rol: RolAuth }): string[] {
-  if (usuario.esAdministrador) return [...MODULO_CLAVES]
-  if (!usuario.rol || !usuario.rol.activo) return []
-  return (usuario.rol.modulosEdicion ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-}
 
 async function buildAuthUser(usuario: {
   idUsuario: number

@@ -1,5 +1,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import jwt, { type SignOptions } from 'jsonwebtoken'
+import { prisma } from '../db/prisma.js'
+import { modulosDe, modulosEdicionDe } from '../services/permisos.js'
 import { ForbiddenError, UnauthorizedError } from '../utils/errors.js'
 
 export interface AuthTokenPayload {
@@ -40,17 +42,44 @@ export function verifyState<T>(token: string): T {
   return jwt.verify(token, JWT_SECRET as string) as T
 }
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+// El token dura hasta 12h, pero sus claims (esAdministrador, modulos, modulosEdicion) son una
+// foto del momento del login — sin esta revalidación, desactivar/bloquear una cuenta o
+// cambiarle el Rol no tenía ningún efecto hasta que el token expirara por su cuenta. Cada
+// solicitud vuelve a consultar el estado real del usuario, igual que ya hacen firmar/liberar/
+// cancelar/derogar/cerrar-desviación con quien provee el PIN.
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization
   if (!header?.startsWith('Bearer ')) return next(new UnauthorizedError('Falta el token de autenticación'))
 
   const token = header.slice('Bearer '.length)
+  let payload: AuthTokenPayload
   try {
-    const payload = jwt.verify(token, JWT_SECRET as string) as AuthTokenPayload
-    req.auth = payload
-    next()
+    payload = jwt.verify(token, JWT_SECRET as string) as AuthTokenPayload
   } catch {
-    next(new UnauthorizedError('Token inválido o expirado'))
+    return next(new UnauthorizedError('Token inválido o expirado'))
+  }
+
+  try {
+    const usuario = await prisma.usuario.findUnique({
+      where: { idUsuario: payload.idUsuario },
+      select: {
+        login: true, activo: true, bloqueado: true, esAdministrador: true,
+        rol: { select: { activo: true, modulos: true, modulosEdicion: true } },
+      },
+    })
+    if (!usuario || !usuario.activo || usuario.bloqueado) {
+      return next(new UnauthorizedError('La sesión ya no es válida — la cuenta fue desactivada o bloqueada'))
+    }
+    req.auth = {
+      idUsuario: payload.idUsuario,
+      login: usuario.login,
+      esAdministrador: usuario.esAdministrador,
+      modulos: modulosDe(usuario).join(','),
+      modulosEdicion: modulosEdicionDe(usuario).join(','),
+    }
+    next()
+  } catch (err) {
+    next(err)
   }
 }
 
