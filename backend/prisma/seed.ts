@@ -36,6 +36,7 @@ async function main() {
     { nombre: 'password_requiere_mayuscula', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos una letra mayúscula (true/false).' },
     { nombre: 'password_requiere_minuscula', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos una letra minúscula (true/false).' },
     { nombre: 'password_requiere_especial', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos un carácter especial (true/false).' },
+    { nombre: 'desviaciones_grupo_cierre', valor: 'Calidad', descripcion: 'Grupos Responsables (separados por coma) autorizados a cerrar una desviación, además de los administradores.' },
   ]
   for (const p of parametrosPorDefecto) {
     await prisma.parametro.upsert({ where: { nombre: p.nombre }, update: {}, create: p })
