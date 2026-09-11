@@ -15,14 +15,14 @@ export const usuariosRouter = Router()
 const ETIQUETAS = {
   numeroIdentificacion: 'N° Documento', nombres: 'Nombres', apellidos: 'Apellidos', login: 'Login',
   email: 'Email', idCentro: 'Centro', esAdministrador: 'Administrador', activo: 'Activo',
-  idRol: 'Rol', fechaCaducidad: 'Fecha de caducidad',
+  idRol: 'Rol', fechaCaducidad: 'Fecha de caducidad', loginLocalDeshabilitado: 'Solo acceso externo (SSO)',
 }
 
 const publicSelect = {
   idUsuario: true, numeroIdentificacion: true, nombres: true, apellidos: true,
   login: true, email: true, activo: true, idCentro: true, esAdministrador: true,
   bloqueado: true, intentosFallidos: true, fechaCreacion: true, fechaCaducidad: true,
-  passwordHash: true, pinHash: true, pinBloqueado: true,
+  passwordHash: true, pinHash: true, pinBloqueado: true, loginLocalDeshabilitado: true,
   idRol: true, rol: { select: { id: true, nombre: true } },
   grupos: { select: { grupo: { select: { id: true, nombre: true } } } },
 } as const
@@ -32,8 +32,9 @@ function toDto(u: Awaited<ReturnType<typeof findAll>>[number]) {
   return {
     ...rest,
     // Con OIDC habilitado la cuenta nunca tiene contraseña propia por diseño — "pendiente de
-    // activación" solo describe algo real en un despliegue de acceso local.
-    activacionPendiente: passwordHash === null && !oidc.isOidcConfigured(),
+    // activación" solo describe algo real en un despliegue de acceso local. Una cuenta con el
+    // acceso local deshabilitado tampoco la necesita.
+    activacionPendiente: passwordHash === null && !oidc.isOidcConfigured() && !u.loginLocalDeshabilitado,
     pinConfigurado: pinHash !== null,
     rolNombre: u.rol?.nombre ?? '',
     grupos: u.grupos.map((g) => g.grupo.nombre).join(','),
@@ -74,7 +75,15 @@ const usuarioSchema = z.object({
   idGrupos: z.array(z.number().int()).optional(),
   idRol: z.number().int().nullable().optional(),
   fechaCaducidad: z.string().nullable().optional(),
+  loginLocalDeshabilitado: z.boolean().optional(),
 })
+
+/** Exigir esto sin OIDC configurado dejaría a la cuenta sin ninguna forma de entrar. */
+function assertLoginLocalDeshabilitadoValido(valor: boolean | undefined) {
+  if (valor && !oidc.isOidcConfigured()) {
+    throw new ValidationError('No se puede deshabilitar el acceso local: este despliegue no tiene configurado el proveedor externo (OIDC)')
+  }
+}
 
 usuariosRouter.post(
   '/',
@@ -83,6 +92,7 @@ usuariosRouter.post(
     const parsed = usuarioSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { idGrupos, fechaCaducidad, ...rest } = parsed.data
+    assertLoginLocalDeshabilitadoValido(rest.loginLocalDeshabilitado)
 
     const usuario = await prisma.$transaction(async (tx) => {
       const creado = await tx.usuario.create({
@@ -121,6 +131,7 @@ usuariosRouter.put(
     const parsed = usuarioUpdateSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { idGrupos, fechaCaducidad, ...rest } = parsed.data
+    assertLoginLocalDeshabilitadoValido(rest.loginLocalDeshabilitado)
     const idUsuario = Number(req.params.id)
 
     const anterior = await prisma.usuario.findUnique({
@@ -128,6 +139,10 @@ usuariosRouter.put(
       include: { grupos: { include: { grupo: true } } },
     })
     if (!anterior) throw new NotFoundError('Usuario no encontrado')
+
+    // Al activarlo, se revoca de una vez cualquier contraseña local que ya tuviera — no debe
+    // quedar una credencial viva sin uso, esperando a que alguien la reactive por error.
+    const activaLoginLocalDeshabilitado = rest.loginLocalDeshabilitado === true && !anterior.loginLocalDeshabilitado
 
     const usuario = await prisma.$transaction(async (tx) => {
       if (idGrupos) {
@@ -139,6 +154,9 @@ usuariosRouter.put(
           ...rest,
           ...(fechaCaducidad !== undefined ? { fechaCaducidad: fechaCaducidad ? new Date(fechaCaducidad) : null } : {}),
           ...(idGrupos ? { grupos: { create: idGrupos.map((idGrupo) => ({ idGrupo })) } } : {}),
+          ...(activaLoginLocalDeshabilitado
+            ? { passwordHash: null, passwordCambiadaEn: null, tokenActivacion: null, tokenActivacionExpira: null }
+            : {}),
         },
         select: publicSelect,
       })
@@ -169,6 +187,9 @@ usuariosRouter.post(
   asyncHandler(async (req, res) => {
     const usuario = await prisma.usuario.findUnique({ where: { idUsuario: Number(req.params.id) } })
     if (!usuario) throw new NotFoundError('Usuario no encontrado')
+    if (usuario.loginLocalDeshabilitado) {
+      throw new ValidationError('Esta cuenta solo tiene acceso externo (SSO) — no tiene sentido enviarle un enlace de contraseña local')
+    }
     const esReenvio = usuario.passwordHash !== null
     await generarYEnviarInvitacion(usuario.idUsuario, usuario.email, usuario.nombres, esReenvio)
     await logAudit(prisma, {

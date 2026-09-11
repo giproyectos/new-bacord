@@ -13,6 +13,7 @@ export interface UsuarioInput {
   idGrupos?: number[]
   idRol?: number | null
   fechaCaducidad?: string | null
+  loginLocalDeshabilitado?: boolean
 }
 
 export const usuariosApi = {

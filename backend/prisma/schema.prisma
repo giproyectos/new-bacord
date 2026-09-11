@@ -83,6 +83,11 @@ model Usuario {
   /// Fecha en que se definió la contraseña actual — nula para cuentas creadas antes de este
   /// campo. Se usa para exigir su renovación por antigüedad (parámetro `password_rotacion_dias`).
   passwordCambiadaEn   DateTime?
+  /// Si es true, esta cuenta solo puede iniciar sesión con el proveedor externo (OIDC) — /login
+  /// la rechaza aunque tenga una contraseña local válida. Para clientes que exigen que todo el
+  /// mundo entre por su cuenta corporativa (y hereden el MFA que tenga esa cuenta), evitando que
+  /// una contraseña local vieja o recién reenviada quede como puerta trasera fuera de esa política.
+  loginLocalDeshabilitado Boolean @default(false)
 
   /// PIN de firma electrónica — secreto corto, independiente de la contraseña de acceso (o del
   /// futuro login OIDC), usado únicamente para confirmar el acto de firmar/liberar un lote.
