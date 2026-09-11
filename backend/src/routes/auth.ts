@@ -103,6 +103,18 @@ authRouter.post(
     }
     if (usuario.bloqueado) throw new UnauthorizedError('Usuario bloqueado. Contacte al administrador')
 
+    // Aunque tenga (o recupere) una contraseña local, esta cuenta solo puede entrar por el
+    // proveedor externo — evita que una contraseña vieja o reenviada quede como puerta trasera
+    // fuera de la política de acceso (y su MFA) que el cliente exige vía OIDC.
+    if (usuario.loginLocalDeshabilitado) {
+      await logAudit(prisma, {
+        entidad: 'Sesion', idEntidad: usuario.idUsuario, descripcionEntidad: `Intento de acceso fallido — usuario: "${login}"`,
+        accion: 'LOGIN_FALLIDO', modulo: 'autenticacion', motivo: 'Acceso local deshabilitado — requiere iniciar sesión con el proveedor externo',
+        actor: { idUsuario: usuario.idUsuario, nombreUsuario: `${usuario.nombres} ${usuario.apellidos}`, loginUsuario: usuario.login, cargo: '—' },
+      })
+      throw new UnauthorizedError('Esta cuenta debe iniciar sesión con su cuenta corporativa')
+    }
+
     if (!usuario.passwordHash) throw new UnauthorizedError('Cuenta pendiente de activación — revise su correo para definir su contraseña')
 
     const cargo = cargoDeGrupos(usuario.grupos.map((g) => g.grupo.nombre), usuario.esAdministrador)
@@ -350,7 +362,8 @@ authRouter.post(
     if (!parsed.success) throw new ValidationError('Correo inválido')
     const usuario = await prisma.usuario.findUnique({ where: { email: parsed.data.email } })
     // Respuesta genérica siempre, exista o no el correo — evita revelar qué cuentas existen.
-    if (usuario && usuario.activo) {
+    // Tampoco se envía si el acceso local está deshabilitado: una contraseña nunca serviría.
+    if (usuario && usuario.activo && !usuario.loginLocalDeshabilitado) {
       await generarYEnviarInvitacion(usuario.idUsuario, usuario.email, usuario.nombres, usuario.passwordHash !== null)
     }
     res.json({ estado: true, mensaje: 'Si el correo está registrado, se envió un enlace para restablecer la contraseña.' })

@@ -14,6 +14,7 @@ export interface Usuario {
   idRol: number | null; rolNombre: string
   fechaCaducidad: string | null; activacionPendiente: boolean
   pinConfigurado: boolean; pinBloqueado: boolean
+  loginLocalDeshabilitado: boolean
   grupos: string; idGrupos: string; fechaCreacion: string
 }
 export interface Rol {

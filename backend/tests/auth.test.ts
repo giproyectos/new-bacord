@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
+import bcrypt from 'bcryptjs'
 import { app } from '../src/app.js'
 import { resetDb, prisma } from './helpers/db.js'
 import { crearEscenarioBasico } from './helpers/fixtures.js'
@@ -71,5 +72,21 @@ describe('requireAuth — revalidación contra la base de datos', () => {
 
     const despues = await request(app).get('/api/batch-records').set('Authorization', `Bearer ${token}`)
     expect(despues.status).toBe(403)
+  })
+})
+
+describe('POST /api/auth/login — cuenta con loginLocalDeshabilitado', () => {
+  it('rechaza el login local aunque la contraseña sea correcta', async () => {
+    const esc = await crearEscenarioBasico()
+    const clave = 'Clave-Segura123!'
+    await prisma.usuario.update({
+      where: { idUsuario: esc.usuarioAdmin.idUsuario },
+      data: { passwordHash: await bcrypt.hash(clave, 4), passwordCambiadaEn: new Date(), loginLocalDeshabilitado: true },
+    })
+
+    const res = await request(app).post('/api/auth/login').send({ login: esc.usuarioAdmin.login, clave })
+
+    expect(res.status).toBe(401)
+    expect(res.body.mensaje).toMatch(/cuenta corporativa/i)
   })
 })

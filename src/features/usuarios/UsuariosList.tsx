@@ -4,6 +4,7 @@ import { usuariosApi } from '@/api/usuarios'
 import { gruposResponsablesApi } from '@/api/gruposResponsables'
 import { centrosApi, type Centro } from '@/api/centros'
 import { rolesApi } from '@/api/roles'
+import { authApi } from '@/api/auth'
 import { colorForKey } from '@/utils/colorPalette'
 import type { Usuario, GrupoResponsable, Rol } from '@/types'
 
@@ -23,7 +24,10 @@ function GrupoChip({ nombre, grupos }: { nombre: string; grupos: GrupoResponsabl
   )
 }
 
-const EMPTY_FORM = { NumeroIdentificacion: '', Email: '', Login: '', Nombres: '', Apellidos: '', IdCentro: '', IdGrupo: '', IdRol: '', FechaCaducidad: '', EsAdministrador: false }
+const EMPTY_FORM = {
+  NumeroIdentificacion: '', Email: '', Login: '', Nombres: '', Apellidos: '', IdCentro: '', IdGrupo: '', IdRol: '',
+  FechaCaducidad: '', EsAdministrador: false, LoginLocalDeshabilitado: false,
+}
 
 export function UsuariosList() {
   const [data, setData]               = useState<Usuario[]>([])
@@ -39,11 +43,15 @@ export function UsuariosList() {
   const [form, setForm]               = useState(EMPTY_FORM)
   const [errors, setErrors]           = useState<Record<string, string>>({})
   const [aviso, setAviso]             = useState('')
+  const [oidc, setOidc]               = useState<{ oidcEnabled: boolean; oidcLabel: string } | null>(null)
 
   const cargar = () => Promise.all([usuariosApi.listar(), gruposResponsablesApi.listar(), centrosApi.listar(), rolesApi.listar()]).then(([us, gs, cs, rs]) => {
     setData(us); setGrupos(gs); setCentros(cs); setRoles(rs)
   }).finally(() => setLoading(false))
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    authApi.config().then(setOidc).catch(() => setOidc({ oidcEnabled: false, oidcLabel: '' }))
+  }, [])
 
   const openCrear = () => {
     setForm({ ...EMPTY_FORM, IdCentro: centros[0] ? String(centros[0].id) : '' }); setEditando(null); setErrors({}); setModalCrear(true)
@@ -55,6 +63,7 @@ export function UsuariosList() {
       IdGrupo: (r.idGrupos ?? '').split(',')[0] ?? '', IdRol: r.idRol ? String(r.idRol) : '',
       FechaCaducidad: r.fechaCaducidad ? r.fechaCaducidad.slice(0, 10) : '',
       EsAdministrador: r.esAdministrador === 1,
+      LoginLocalDeshabilitado: r.loginLocalDeshabilitado,
     })
     setEditando(r); setErrors({}); setModalCrear(true)
   }
@@ -80,6 +89,7 @@ export function UsuariosList() {
       nombres: form.Nombres.trim(), apellidos: form.Apellidos.trim(), idCentro: Number(form.IdCentro),
       idGrupos, idRol, esAdministrador: form.EsAdministrador,
       fechaCaducidad: form.FechaCaducidad || null,
+      loginLocalDeshabilitado: form.LoginLocalDeshabilitado,
     }
     const res = editando
       ? await usuariosApi.actualizar(editando.idUsuario, payload)
@@ -135,6 +145,7 @@ export function UsuariosList() {
           {r.activacionPendiente && <span style={{ marginLeft: 4, color: '#D97706' }} title="Aún no ha activado su cuenta"><i className="fa fa-hourglass-half" /></span>}
           {r.pinBloqueado && <span style={{ marginLeft: 4, color: '#DC2626' }} title="PIN de firma bloqueado por intentos fallidos"><i className="fa fa-key" /></span>}
           {!r.activacionPendiente && !r.pinConfigurado && <span style={{ marginLeft: 4, color: '#D97706' }} title="Aún no ha configurado su PIN de firma"><i className="fa fa-key" /></span>}
+          {r.loginLocalDeshabilitado && <span style={{ marginLeft: 4, color: 'var(--navy)' }} title="Solo puede entrar con su cuenta corporativa (SSO)"><i className="fa fa-building" /></span>}
         </span>
       ),
     },
@@ -149,13 +160,15 @@ export function UsuariosList() {
           {(r.pinConfigurado || r.pinBloqueado) && (
             <button className="dt-ab dt-ab-extra" title="Reiniciar PIN de firma" onClick={() => reiniciarPin(r)}><i className="fa fa-key" /></button>
           )}
-          <button
-            className="dt-ab dt-ab-extra"
-            title={r.activacionPendiente ? 'Reenviar invitación' : 'Enviar enlace para restablecer contraseña'}
-            onClick={() => reenviarInvitacion(r)}
-          >
-            <i className="fa fa-envelope" />
-          </button>
+          {!r.loginLocalDeshabilitado && (
+            <button
+              className="dt-ab dt-ab-extra"
+              title={r.activacionPendiente ? 'Reenviar invitación' : 'Enviar enlace para restablecer contraseña'}
+              onClick={() => reenviarInvitacion(r)}
+            >
+              <i className="fa fa-envelope" />
+            </button>
+          )}
           <button
             className={`dt-ab ${r.activo ? 'dt-ab-del' : 'dt-ab-extra'}`}
             title={r.activo ? 'Desactivar usuario' : 'Activar usuario'}
@@ -349,6 +362,13 @@ export function UsuariosList() {
                 <input type="checkbox" checked={form.EsAdministrador} onChange={e => setForm(v => ({ ...v, EsAdministrador: e.target.checked, IdRol: e.target.checked ? '' : v.IdRol }))} />
                 Administrador del sistema (acceso total, sin restricción por rol)
               </label>
+              {oidc?.oidcEnabled && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-2)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={form.LoginLocalDeshabilitado}
+                    onChange={e => setForm(v => ({ ...v, LoginLocalDeshabilitado: e.target.checked }))} />
+                  Solo puede entrar con {oidc.oidcLabel} (deshabilita su contraseña local, si tenía una)
+                </label>
+              )}
             </div>
             <div className="ul-mfoot">
               <button className="btn btn-gray" onClick={() => { setModalCrear(false); setEditando(null) }}><i className="fa fa-undo" /> Cancelar</button>
