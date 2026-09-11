@@ -42,10 +42,27 @@ function toDto(u: Awaited<ReturnType<typeof findAll>>[number]) {
   }
 }
 
+// Era la única desactivación de cuenta en todo el sistema sin rastro de auditoría — updateMany
+// no deja ni cuándo pasó ni por qué. Corre como efecto secundario de cada GET, así que un
+// usuario puede aparecer "Activo" en la respuesta anterior y "Inactivo" en la siguiente sin que
+// quede registrado en ningún lado más que este evento.
 async function desactivarCaducados() {
-  await prisma.usuario.updateMany({
+  const caducados = await prisma.usuario.findMany({
     where: { activo: true, fechaCaducidad: { lt: new Date() } },
-    data: { activo: false },
+  })
+  if (caducados.length === 0) return
+
+  const actorSistema = { idUsuario: 0, nombreUsuario: 'Sistema', loginUsuario: 'sistema', cargo: 'Regla automática' }
+  await prisma.$transaction(async (tx) => {
+    for (const usuario of caducados) {
+      await tx.usuario.update({ where: { idUsuario: usuario.idUsuario }, data: { activo: false } })
+      await logAudit(tx, {
+        entidad: 'Usuario', idEntidad: usuario.idUsuario, descripcionEntidad: `${usuario.login} — ${usuario.nombres} ${usuario.apellidos}`,
+        accion: 'MODIFICAR', modulo: 'usuarios', motivo: 'Cuenta caducada — desactivada automáticamente',
+        cambios: [{ campo: 'activo', etiqueta: 'Activo', valorAnterior: 'true', valorNuevo: 'false' }],
+        actor: actorSistema,
+      })
+    }
   })
 }
 

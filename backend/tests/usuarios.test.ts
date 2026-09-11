@@ -70,6 +70,29 @@ describe('PUT /api/usuarios/:id — loginLocalDeshabilitado', () => {
   })
 })
 
+describe('GET /api/usuarios — desactivación automática por caducidad', () => {
+  it('deja un evento de auditoría al desactivar una cuenta caducada', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const caducado = await prisma.usuario.create({
+      data: {
+        numeroIdentificacion: '900000010', nombres: 'Cuenta', apellidos: 'Caducada',
+        login: 'cuenta.caducada', email: 'cuenta.caducada@bacord.test', idCentro: esc.centro.id,
+        esAdministrador: false, activo: true, fechaCaducidad: new Date(Date.now() - 86400000),
+      },
+    })
+
+    const res = await request(app).get('/api/usuarios').set('Authorization', `Bearer ${token}`)
+    expect(res.status).toBe(200)
+
+    const actual = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: caducado.idUsuario } })
+    expect(actual.activo).toBe(false)
+
+    const evento = await prisma.auditEntry.findFirstOrThrow({ where: { idEntidad: String(caducado.idUsuario), entidad: 'Usuario' } })
+    expect(evento.motivo).toMatch(/caducada/i)
+  })
+})
+
 describe('protección del último administrador activo', () => {
   it('rechaza quitarle la marca de Administrador al único administrador', async () => {
     const esc = await crearEscenarioBasico()
