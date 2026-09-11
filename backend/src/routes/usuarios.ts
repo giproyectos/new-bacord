@@ -85,6 +85,27 @@ function assertLoginLocalDeshabilitadoValido(valor: boolean | undefined) {
   }
 }
 
+/**
+ * Usuarios y Roles están reservados a esAdministrador — si ese cambio deja al usuario sin ser
+ * administrador activo (lo desactiva, lo degrada, o ambos) y no queda ningún otro administrador
+ * activo, nadie podría volver a gestionar cuentas ni roles nunca más. Cubre tanto que alguien
+ * degrade/desactive al último admin como que el propio admin lo haga sobre sí mismo.
+ */
+async function assertNoUltimoAdministrador(idUsuario: number, cambios: { esAdministrador?: boolean; activo?: boolean }) {
+  const actual = await prisma.usuario.findUnique({ where: { idUsuario } })
+  if (!actual || !actual.esAdministrador || !actual.activo) return
+
+  const siguesSiendoAdminActivo = (cambios.esAdministrador ?? actual.esAdministrador) && (cambios.activo ?? actual.activo)
+  if (siguesSiendoAdminActivo) return
+
+  const otrosAdministradoresActivos = await prisma.usuario.count({
+    where: { esAdministrador: true, activo: true, idUsuario: { not: idUsuario } },
+  })
+  if (otrosAdministradoresActivos === 0) {
+    throw new ValidationError('No se puede quitar el último administrador activo del sistema — cree o active otro administrador primero')
+  }
+}
+
 usuariosRouter.post(
   '/',
   requireAdmin,
@@ -133,6 +154,7 @@ usuariosRouter.put(
     const { idGrupos, fechaCaducidad, ...rest } = parsed.data
     assertLoginLocalDeshabilitadoValido(rest.loginLocalDeshabilitado)
     const idUsuario = Number(req.params.id)
+    await assertNoUltimoAdministrador(idUsuario, { esAdministrador: rest.esAdministrador, activo: rest.activo })
 
     const anterior = await prisma.usuario.findUnique({
       where: { idUsuario },
@@ -253,6 +275,7 @@ usuariosRouter.delete(
     const idUsuario = Number(req.params.id)
     const usuario = await prisma.usuario.findUnique({ where: { idUsuario } })
     if (!usuario) throw new NotFoundError('Usuario no encontrado')
+    await assertNoUltimoAdministrador(idUsuario, { activo: false })
 
     await prisma.$transaction(async (tx) => {
       await tx.usuario.update({ where: { idUsuario }, data: { activo: false } })
