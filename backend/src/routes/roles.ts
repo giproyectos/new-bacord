@@ -79,13 +79,19 @@ rolesRouter.put(
 
     const rol = await prisma.$transaction(async (tx) => {
       const modulosFinal = modulos ?? anterior.modulos.split(',').filter(Boolean)
-      const modulosEdicionFinal = edicionValida(modulosFinal, modulosEdicion)
+      // Si solo llega `modulos` (se reduce el acceso de lectura) sin `modulosEdicion` en la misma
+      // petición, igual hay que recortar la edición contra el nuevo conjunto — de lo contrario
+      // quedaría un módulo con permiso de editar que ya no se puede ni ver, violando la regla que
+      // el propio schema declara ("editar sin poder ver no tiene sentido").
+      const modulosEdicionBase = modulosEdicion ?? anterior.modulosEdicion?.split(',').filter(Boolean) ?? []
+      const modulosEdicionFinal = edicionValida(modulosFinal, modulosEdicionBase)
+      const tocaEdicion = modulos !== undefined || modulosEdicion !== undefined
       const actualizado = await tx.rol.update({
         where: { id },
         data: {
           ...rest,
           ...(modulos ? { modulos: modulos.join(',') } : {}),
-          ...(modulosEdicion !== undefined ? { modulosEdicion: modulosEdicionFinal.join(',') } : {}),
+          ...(tocaEdicion ? { modulosEdicion: modulosEdicionFinal.join(',') } : {}),
         },
       })
 
