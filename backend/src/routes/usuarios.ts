@@ -42,10 +42,27 @@ function toDto(u: Awaited<ReturnType<typeof findAll>>[number]) {
   }
 }
 
+// Era la única desactivación de cuenta en todo el sistema sin rastro de auditoría — updateMany
+// no deja ni cuándo pasó ni por qué. Corre como efecto secundario de cada GET, así que un
+// usuario puede aparecer "Activo" en la respuesta anterior y "Inactivo" en la siguiente sin que
+// quede registrado en ningún lado más que este evento.
 async function desactivarCaducados() {
-  await prisma.usuario.updateMany({
+  const caducados = await prisma.usuario.findMany({
     where: { activo: true, fechaCaducidad: { lt: new Date() } },
-    data: { activo: false },
+  })
+  if (caducados.length === 0) return
+
+  const actorSistema = { idUsuario: 0, nombreUsuario: 'Sistema', loginUsuario: 'sistema', cargo: 'Regla automática' }
+  await prisma.$transaction(async (tx) => {
+    for (const usuario of caducados) {
+      await tx.usuario.update({ where: { idUsuario: usuario.idUsuario }, data: { activo: false } })
+      await logAudit(tx, {
+        entidad: 'Usuario', idEntidad: usuario.idUsuario, descripcionEntidad: `${usuario.login} — ${usuario.nombres} ${usuario.apellidos}`,
+        accion: 'MODIFICAR', modulo: 'usuarios', motivo: 'Cuenta caducada — desactivada automáticamente',
+        cambios: [{ campo: 'activo', etiqueta: 'Activo', valorAnterior: 'true', valorNuevo: 'false' }],
+        actor: actorSistema,
+      })
+    }
   })
 }
 
@@ -82,6 +99,27 @@ const usuarioSchema = z.object({
 function assertLoginLocalDeshabilitadoValido(valor: boolean | undefined) {
   if (valor && !oidc.isOidcConfigured()) {
     throw new ValidationError('No se puede deshabilitar el acceso local: este despliegue no tiene configurado el proveedor externo (OIDC)')
+  }
+}
+
+/**
+ * Usuarios y Roles están reservados a esAdministrador — si ese cambio deja al usuario sin ser
+ * administrador activo (lo desactiva, lo degrada, o ambos) y no queda ningún otro administrador
+ * activo, nadie podría volver a gestionar cuentas ni roles nunca más. Cubre tanto que alguien
+ * degrade/desactive al último admin como que el propio admin lo haga sobre sí mismo.
+ */
+async function assertNoUltimoAdministrador(idUsuario: number, cambios: { esAdministrador?: boolean; activo?: boolean }) {
+  const actual = await prisma.usuario.findUnique({ where: { idUsuario } })
+  if (!actual || !actual.esAdministrador || !actual.activo) return
+
+  const siguesSiendoAdminActivo = (cambios.esAdministrador ?? actual.esAdministrador) && (cambios.activo ?? actual.activo)
+  if (siguesSiendoAdminActivo) return
+
+  const otrosAdministradoresActivos = await prisma.usuario.count({
+    where: { esAdministrador: true, activo: true, idUsuario: { not: idUsuario } },
+  })
+  if (otrosAdministradoresActivos === 0) {
+    throw new ValidationError('No se puede quitar el último administrador activo del sistema — cree o active otro administrador primero')
   }
 }
 
@@ -133,6 +171,7 @@ usuariosRouter.put(
     const { idGrupos, fechaCaducidad, ...rest } = parsed.data
     assertLoginLocalDeshabilitadoValido(rest.loginLocalDeshabilitado)
     const idUsuario = Number(req.params.id)
+    await assertNoUltimoAdministrador(idUsuario, { esAdministrador: rest.esAdministrador, activo: rest.activo })
 
     const anterior = await prisma.usuario.findUnique({
       where: { idUsuario },
@@ -253,6 +292,7 @@ usuariosRouter.delete(
     const idUsuario = Number(req.params.id)
     const usuario = await prisma.usuario.findUnique({ where: { idUsuario } })
     if (!usuario) throw new NotFoundError('Usuario no encontrado')
+    await assertNoUltimoAdministrador(idUsuario, { activo: false })
 
     await prisma.$transaction(async (tx) => {
       await tx.usuario.update({ where: { idUsuario }, data: { activo: false } })

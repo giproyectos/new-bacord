@@ -70,6 +70,88 @@ describe('PUT /api/usuarios/:id — loginLocalDeshabilitado', () => {
   })
 })
 
+describe('GET /api/usuarios — desactivación automática por caducidad', () => {
+  it('deja un evento de auditoría al desactivar una cuenta caducada', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const caducado = await prisma.usuario.create({
+      data: {
+        numeroIdentificacion: '900000010', nombres: 'Cuenta', apellidos: 'Caducada',
+        login: 'cuenta.caducada', email: 'cuenta.caducada@bacord.test', idCentro: esc.centro.id,
+        esAdministrador: false, activo: true, fechaCaducidad: new Date(Date.now() - 86400000),
+      },
+    })
+
+    const res = await request(app).get('/api/usuarios').set('Authorization', `Bearer ${token}`)
+    expect(res.status).toBe(200)
+
+    const actual = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: caducado.idUsuario } })
+    expect(actual.activo).toBe(false)
+
+    const evento = await prisma.auditEntry.findFirstOrThrow({ where: { idEntidad: String(caducado.idUsuario), entidad: 'Usuario' } })
+    expect(evento.motivo).toMatch(/caducada/i)
+  })
+})
+
+describe('protección del último administrador activo', () => {
+  it('rechaza quitarle la marca de Administrador al único administrador', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .put(`/api/usuarios/${esc.usuarioAdmin.idUsuario}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ esAdministrador: false })
+
+    expect(res.status).toBe(400)
+    const actual = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: esc.usuarioAdmin.idUsuario } })
+    expect(actual.esAdministrador).toBe(true)
+  })
+
+  it('rechaza desactivar al único administrador (PUT)', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .put(`/api/usuarios/${esc.usuarioAdmin.idUsuario}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ activo: false })
+
+    expect(res.status).toBe(400)
+  })
+
+  it('rechaza eliminar (desactivar) al único administrador', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .delete(`/api/usuarios/${esc.usuarioAdmin.idUsuario}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(400)
+    const actual = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: esc.usuarioAdmin.idUsuario } })
+    expect(actual.activo).toBe(true)
+  })
+
+  it('permite desactivar a un administrador si queda otro administrador activo', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const otroAdmin = await prisma.usuario.create({
+      data: {
+        numeroIdentificacion: '900000009', nombres: 'Otro', apellidos: 'Administrador',
+        login: 'otro.admin', email: 'otro.admin@bacord.test', idCentro: esc.centro.id,
+        esAdministrador: true, activo: true,
+      },
+    })
+
+    const res = await request(app)
+      .delete(`/api/usuarios/${otroAdmin.idUsuario}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('POST /api/usuarios/:id/reenviar-invitacion', () => {
   it('rechaza reenviar un enlace de contraseña a una cuenta con loginLocalDeshabilitado', async () => {
     activarOidc()
