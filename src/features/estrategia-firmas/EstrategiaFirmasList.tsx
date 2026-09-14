@@ -3,8 +3,9 @@ import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
 import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
 import { firmasApi, type FirmaApi } from '@/api/firmas'
+import { gruposResponsablesApi } from '@/api/gruposResponsables'
 import { usePuedeEditar } from '@/hooks/usePermisos'
-import type { EstrategiaFirma, EstrategiaFirmaItem } from '@/types'
+import type { EstrategiaFirma, EstrategiaFirmaItem, GrupoResponsable } from '@/types'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -236,20 +237,31 @@ export function EstrategiaFirmasList() {
   const puedeEditar = usePuedeEditar('estrategias-firma')
   const [data, setData] = useState<EstrategiaFirma[]>([])
   const [firmasCatalogo, setFirmasCatalogo] = useState<FirmaApi[]>([])
+  const [grupos, setGrupos] = useState<GrupoResponsable[]>([])
   const [loading, setLoading] = useState(true)
   const [firmasModal, setFirmasModal] = useState<EstrategiaFirma | null>(null)
   const [modalCrear, setModalCrear] = useState(false)
   const [editando, setEditando] = useState<EstrategiaFirma | null>(null)
-  const [form, setForm] = useState({ codigo: '', descripcion: '' })
+  const [form, setForm] = useState({ codigo: '', descripcion: '', gruposDerogacion: [] as string[] })
 
-  const cargar = () => Promise.all([estrategiasFirmaApi.listar(), firmasApi.listar()]).then(([efs, firmas]) => {
+  const cargar = () => Promise.all([estrategiasFirmaApi.listar(), firmasApi.listar(), gruposResponsablesApi.listar()]).then(([efs, firmas, gs]) => {
     setData(efs)
     setFirmasCatalogo(firmas)
+    setGrupos(gs)
   }).finally(() => setLoading(false))
   useEffect(() => { cargar() }, [])
 
-  const openCrear = () => { setForm({ codigo: '', descripcion: '' }); setEditando(null); setModalCrear(true) }
-  const openEditar = (r: EstrategiaFirma) => { setForm({ codigo: r.codigo, descripcion: r.descripcion }); setEditando(r); setModalCrear(true) }
+  const openCrear = () => { setForm({ codigo: '', descripcion: '', gruposDerogacion: [] }); setEditando(null); setModalCrear(true) }
+  const openEditar = (r: EstrategiaFirma) => { setForm({ codigo: r.codigo, descripcion: r.descripcion, gruposDerogacion: [...(r.gruposDerogacion ?? [])] }); setEditando(r); setModalCrear(true) }
+
+  const toggleGrupoDerogacion = (nombre: string) => {
+    setForm(f => ({
+      ...f,
+      gruposDerogacion: f.gruposDerogacion.includes(nombre)
+        ? f.gruposDerogacion.filter(g => g !== nombre)
+        : [...f.gruposDerogacion, nombre],
+    }))
+  }
 
   const handleSave = async () => {
     if (!form.codigo.trim() || !form.descripcion.trim()) return
@@ -368,6 +380,29 @@ export function EstrategiaFirmasList() {
                 </label>
                 <input className="form-control" value={form.descripcion} maxLength={80}
                   onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} placeholder="Descripción de la estrategia" />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 5 }}>
+                  Grupos que pueden derogar una firma
+                </label>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-4)', marginBottom: 8 }}>
+                  Solo estos grupos (además de los administradores) podrán revocar una firma ya registrada bajo esta estrategia.
+                </div>
+                {grupos.filter(g => g.activo).length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-4)' }}>No hay grupos responsables activos configurados.</div>
+                ) : (
+                  <div style={{ border: '1.5px solid var(--hair-2)', borderRadius: 'var(--r-sm)', padding: '4px 12px' }}>
+                    {grupos.filter(g => g.activo).map(g => (
+                      <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '6px 0', fontSize: 13, color: 'var(--ink-2)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={form.gruposDerogacion.includes(g.nombre)}
+                          onChange={() => toggleGrupoDerogacion(g.nombre)}
+                          style={{ accentColor: 'var(--navy)', width: 14, height: 14 }} />
+                        {g.nombre}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
               {editando && (
                 <div style={{ padding: '10px 14px', background: 'rgba(10,45,99,.06)',
