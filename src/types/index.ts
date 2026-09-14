@@ -63,7 +63,7 @@ export const GRUPOS: Record<number, string> = {
   1: 'Administradores', 2: 'Producción', 3: 'Calidad', 4: 'Supervisión',
 }
 export interface GrupoResponsable {
-  id: number; nombre: string; descripcion: string; colorKey: string
+  id: number; nombre: string; descripcion: string; colorKey: string; activo: boolean
 }
 export interface DatosFirma {
   idBatchRecord: number; idDetalleFirma: number; codigo: string; cierraProceso: number; cierraBatch: number

@@ -34,6 +34,40 @@ const estrategiaSchema = z.object({
   firmas: z.array(itemSchema),
 })
 
+// A diferencia de `modulos` en Roles (un enum fijo), los nombres de Grupo Responsable son datos
+// dinámicos — sin este chequeo, un nombre mal escrito o un grupo luego renombrado/desactivado
+// deja la autorización de derogación rota en silencio (nadie lo nota hasta que alguien intenta
+// derogar una firma y no puede).
+async function assertGruposDerogacionValidos(gruposDerogacion: string[] | undefined) {
+  if (!gruposDerogacion || gruposDerogacion.length === 0) return
+  const encontrados = await prisma.grupoResponsable.findMany({
+    where: { nombre: { in: gruposDerogacion }, activo: true },
+    select: { nombre: true },
+  })
+  const nombresEncontrados = new Set(encontrados.map((g) => g.nombre))
+  const faltantes = gruposDerogacion.filter((g) => !nombresEncontrados.has(g))
+  if (faltantes.length > 0) {
+    throw new ValidationError(`Grupo(s) responsable(s) inexistente(s) o inactivo(s): ${faltantes.join(', ')}`)
+  }
+}
+
+// Sin este chequeo, un idFirma inexistente o de una Firma desactivada llega intacto hasta el
+// `firmas: { create: firmas }` de Prisma, que revienta con una violación de llave foránea (P2003)
+// no manejada por errorHandler — el administrador ve un 500 genérico en vez de un mensaje claro.
+async function assertFirmasValidas(firmas: { idFirma: number }[] | undefined) {
+  if (!firmas || firmas.length === 0) return
+  const idsFirmas = [...new Set(firmas.map((f) => f.idFirma))]
+  const encontradas = await prisma.firma.findMany({
+    where: { idFirma: { in: idsFirmas }, activo: true },
+    select: { idFirma: true },
+  })
+  const idsEncontrados = new Set(encontradas.map((f) => f.idFirma))
+  const faltantes = idsFirmas.filter((id) => !idsEncontrados.has(id))
+  if (faltantes.length > 0) {
+    throw new ValidationError(`Firma(s) inexistente(s) o inactiva(s): ${faltantes.join(', ')}`)
+  }
+}
+
 estrategiasFirmaRouter.post(
   '/',
   requireModuloEditar('estrategias-firma'),
@@ -41,6 +75,8 @@ estrategiasFirmaRouter.post(
     const parsed = estrategiaSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { firmas, gruposDerogacion, ...rest } = parsed.data
+    await assertGruposDerogacionValidos(gruposDerogacion)
+    await assertFirmasValidas(firmas)
 
     const estrategia = await prisma.$transaction(async (tx) => {
       const creada = await tx.estrategiaFirma.create({
@@ -69,6 +105,8 @@ estrategiasFirmaRouter.put(
     const parsed = estrategiaSchema.partial().safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { firmas, gruposDerogacion, ...rest } = parsed.data
+    await assertGruposDerogacionValidos(gruposDerogacion)
+    await assertFirmasValidas(firmas)
     const id = Number(req.params.id)
 
     const anterior = await prisma.estrategiaFirma.findUnique({ where: { id }, include })
