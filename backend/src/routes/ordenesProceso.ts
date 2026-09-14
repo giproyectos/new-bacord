@@ -1,10 +1,13 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe } from '../services/audit.js'
+
+type Tx = Prisma.TransactionClient | typeof prisma
 
 export const ordenesProcesoRouter = Router()
 
@@ -76,6 +79,18 @@ const ordenSchema = z.object({
   componentes: z.array(componenteSchema).optional(),
 })
 
+// Una Receta Maestra recorre Creación → Revisión → Aprobado antes de llegar a Activo (idEstado 1,
+// ver recetasMaestras.ts) — es la única que ya pasó por el flujo de aprobación y está lista para
+// producción. Sin este chequeo se podía fabricar (Orden → Fórmula de Control → Batch Record) con
+// una receta todavía en Creación, en Revisión, Rechazada o Inactiva.
+async function assertRecetaActiva(tx: Tx, idRecetaMaestra: number) {
+  const receta = await tx.recetaMaestra.findUnique({ where: { idRecetaMaestra } })
+  if (!receta) throw new ValidationError('La Receta Maestra indicada no existe')
+  if (receta.idEstado !== 1) {
+    throw new ConflictError(`La Receta Maestra "${receta.codigo}" no está Activa — no se puede crear una Orden de Proceso con ella`)
+  }
+}
+
 ordenesProcesoRouter.post(
   '/',
   requireModuloEditar('ordenes-proceso'),
@@ -83,6 +98,7 @@ ordenesProcesoRouter.post(
     const parsed = ordenSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { componentes, fechaFabricacion, fechaCaducidad, ...rest } = parsed.data
+    await assertRecetaActiva(prisma, rest.idRecetaMaestra)
 
     const orden = await prisma.$transaction(async (tx) => {
       const creada = await tx.ordenProceso.create({
@@ -127,6 +143,7 @@ ordenesProcesoRouter.post(
       for (let i = 0; i < ordenes.length; i++) {
         const { fechaFabricacion, fechaCaducidad, ...rest } = ordenes[i]
         try {
+          await assertRecetaActiva(tx, rest.idRecetaMaestra)
           await tx.ordenProceso.create({
             data: {
               ...rest,
