@@ -74,6 +74,7 @@ recetasMaestrasRouter.post(
       const creada = await tx.recetaMaestra.create({
         data: {
           ...parsed.data,
+          idEstado: 4, // Creación — debe pasar por Revisión y Aprobación antes de poder Activarse.
           usuarioCreacion: req.auth!.login,
           usuarioModificacion: req.auth!.login,
         },
@@ -198,6 +199,16 @@ recetasMaestrasRouter.put(
 )
 
 const ESTADO_LABEL: Record<number, string> = { 1: 'Activo', 2: 'Inactivo', 3: 'Aprobado', 4: 'Creación', 5: 'Revisión', 6: 'Rechazado' }
+// Mismo flujo que expone el frontend (RecetaMaestraList.tsx, `siguienteEstado`): Creación → Revisión
+// → Aprobado → Activo → Inactivo. Sin esto, el endpoint aceptaba cualquier entero — una llamada
+// directa a la API podía saltarse la revisión/aprobación y activar la receta de un salto, o guardar
+// un idEstado que ni el propio ESTADO_LABEL reconoce.
+const TRANSICIONES_VALIDAS: Record<number, number[]> = {
+  4: [5], // Creación → Revisión
+  5: [3], // Revisión → Aprobado
+  3: [1], // Aprobado → Activo
+  1: [2], // Activo → Inactivo
+}
 const cambiarEstadoSchema = z.object({ idEstado: z.number().int(), motivo: z.string().optional() })
 
 recetasMaestrasRouter.post(
@@ -209,6 +220,13 @@ recetasMaestrasRouter.post(
     const idRecetaMaestra = Number(req.params.id)
     const anterior = await prisma.recetaMaestra.findUnique({ where: { idRecetaMaestra } })
     if (!anterior) throw new NotFoundError('Receta Maestra no encontrada')
+
+    const transicionesPermitidas = TRANSICIONES_VALIDAS[anterior.idEstado] ?? []
+    if (!transicionesPermitidas.includes(parsed.data.idEstado)) {
+      const estadoActual = ESTADO_LABEL[anterior.idEstado] ?? String(anterior.idEstado)
+      const estadoPedido = ESTADO_LABEL[parsed.data.idEstado] ?? String(parsed.data.idEstado)
+      throw new ConflictError(`No se puede pasar de "${estadoActual}" a "${estadoPedido}"`)
+    }
 
     const receta = await prisma.$transaction(async (tx) => {
       const actualizada = await tx.recetaMaestra.update({
@@ -257,7 +275,7 @@ recetasMaestrasRouter.post(
           version: original.version,
           idCentro: original.idCentro,
           idMaterial: original.idMaterial,
-          idEstado: 1,
+          idEstado: 4, // Creación — una nueva versión vuelve a pasar por Revisión y Aprobación, no hereda el estado del original.
           motivo: `Copiada de ${original.codigo}`,
           usuarioCreacion: req.auth!.login,
           usuarioModificacion: req.auth!.login,

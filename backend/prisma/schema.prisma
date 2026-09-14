@@ -227,7 +227,7 @@ model RecetaMaestra {
   version             String
   idCentro            Int
   centro              Centro   @relation(fields: [idCentro], references: [id])
-  idEstado            Int      @default(1) // 1 Borrador, 2 Aprobada, 3 Obsoleta
+  idEstado            Int      @default(4) // 1 Activo, 2 Inactivo, 3 Aprobado, 4 Creación, 5 Revisión, 6 Rechazado
   idMaterial          Int
   material            Material @relation(fields: [idMaterial], references: [id])
   motivo              String?  @db.Text
