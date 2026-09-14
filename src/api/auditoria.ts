@@ -1,13 +1,6 @@
 import { http } from './http'
 import type { AuditAccion, AuditCambio, AuditEntidad, AuditEntry } from '@/types/audit'
 
-export interface FirmanteAudit {
-  idUsuario: number
-  nombreUsuario: string
-  loginUsuario: string
-  cargo: string
-}
-
 export interface RegistrarAuditParams {
   entidad: AuditEntidad
   idEntidad: string | number
@@ -16,7 +9,6 @@ export interface RegistrarAuditParams {
   modulo: string
   cambios?: AuditCambio[]
   motivo?: string
-  firmante?: FirmanteAudit
 }
 
 export const auditoriaApi = {
