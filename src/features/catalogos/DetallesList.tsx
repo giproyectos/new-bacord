@@ -2205,7 +2205,7 @@ function PreviewFirmaModal({ firma, onConfirm, onClose }: {
 
 function FormularioPanel({ detalle, onClose, onSave }: {
   detalle: Detalle; onClose: () => void
-  onSave: (jsonSchema: string, jsonData: string, jsonOptions: string) => void
+  onSave: (jsonSchema: string, jsonData: string, jsonOptions: string) => Promise<void>
 }) {
   const puedeEditar = usePuedeEditar('detalles')
   const [comps, setComps]       = useState<FormComp[]>(() => loadComps(detalle))
@@ -2229,6 +2229,7 @@ function FormularioPanel({ detalle, onClose, onSave }: {
   const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [firmadosPreview, setFirmadosPreview] = useState<Record<string, boolean>>({})
   const [savedToast, setSavedToast] = useState(false)
+  const [saveErrorMsg, setSaveErrorMsg] = useState('')
   const [firmaPreview, setFirmaPreview] = useState<{ firmaKey: string; texto: string; grupo: string } | null>(null)
   const [undoDelete, setUndoDelete] = useState<{ comp: FormComp; idx: number; label: string } | null>(null)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2570,7 +2571,16 @@ function FormularioPanel({ detalle, onClose, onSave }: {
             </button>
           )}
           {puedeEditar && (
-            <button className="btn btn-primary" style={{ fontSize:12, padding:'6px 16px' }} onClick={() => { try { onSave(toFormio(comps), JSON.stringify(comps), JSON.stringify({ numberFormat: numFormat })); setSavedToast(true); setTimeout(() => setSavedToast(false), 2500) } catch(e) { console.error('Error al guardar detalle:', e) } }}>
+            <button className="btn btn-primary" style={{ fontSize:12, padding:'6px 16px' }} onClick={async () => {
+              try {
+                await onSave(toFormio(comps), JSON.stringify(comps), JSON.stringify({ numberFormat: numFormat }))
+                setSavedToast(true)
+                setTimeout(() => setSavedToast(false), 2500)
+              } catch (e) {
+                setSaveErrorMsg(e instanceof Error ? e.message : 'No se pudo guardar el formulario')
+                setTimeout(() => setSaveErrorMsg(''), 4000)
+              }
+            }}>
               <i className="fa fa-save" /> Grabar
             </button>
           )}
@@ -2938,6 +2948,12 @@ function FormularioPanel({ detalle, onClose, onSave }: {
         </div>
       )}
 
+      {saveErrorMsg && (
+        <div style={{ position:'fixed', bottom:24, right:24, background:'#991B1B', color:'#fff', padding:'10px 18px', borderRadius:8, fontSize:13, fontWeight:600, display:'flex', alignItems:'center', gap:8, boxShadow:'0 4px 24px rgba(0,0,0,.18)', zIndex:9999, maxWidth:400 }}>
+          <i className="fa fa-exclamation-circle" /> {saveErrorMsg}
+        </div>
+      )}
+
       {undoDelete && (
         <div style={{ position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)', background:'#0F172A', color:'#fff', padding:'11px 18px', borderRadius:10, fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:12, boxShadow:'0 4px 24px rgba(0,0,0,.28)', zIndex:9999, minWidth:300 }}>
           <i className="fa fa-trash-alt" style={{ color:'#F87171', fontSize:12 }} />
@@ -3035,15 +3051,20 @@ export function DetallesList() {
 
   const handleSave = async () => {
     if (!validate()) return
-    if (mode==='crear') {
-      await detallesApi.crear({ codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null, jsonSchema: '', jsonData: '', jsonOptions: '' })
-    } else if (mode==='modificar' && selected) {
-      await detallesApi.actualizar(selected.id, { codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null })
-    } else if (mode==='copiar' && selected) {
-      await detallesApi.crear({
-        codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null,
-        jsonSchema: copiarInst ? selected.jsonSchema : '', jsonData: copiarInst ? selected.jsonData : '', jsonOptions: '',
-      })
+    try {
+      if (mode==='crear') {
+        await detallesApi.crear({ codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null, jsonSchema: '', jsonData: '', jsonOptions: '' })
+      } else if (mode==='modificar' && selected) {
+        await detallesApi.actualizar(selected.id, { codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null })
+      } else if (mode==='copiar' && selected) {
+        await detallesApi.crear({
+          codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), estado: form.estado, idEstrategiaFirma: form.idEstrategiaFirma ?? null,
+          jsonSchema: copiarInst ? selected.jsonSchema : '', jsonData: copiarInst ? selected.jsonData : '', jsonOptions: '',
+        })
+      }
+    } catch (e) {
+      setErrors(er => ({ ...er, general: e instanceof Error ? e.message : 'No se pudo guardar el formulario' }))
+      return
     }
     setMode(null)
     cargar()
@@ -3055,11 +3076,10 @@ export function DetallesList() {
     cargar()
   }
   const handleSaveForm = async (jsonSchema: string, jsonData: string, jsonOptions: string) => {
-    if (formulario) {
-      await detallesApi.actualizar(formulario.id, { jsonSchema, jsonData, jsonOptions })
-      setData(ds => ds.map(x => x.id===formulario.id ? {...x,jsonSchema,jsonData,jsonOptions} : x))
-      setFormulario(f => f ? {...f,jsonSchema,jsonData,jsonOptions} : null)
-    }
+    if (!formulario) return
+    await detallesApi.actualizar(formulario.id, { jsonSchema, jsonData, jsonOptions })
+    setData(ds => ds.map(x => x.id===formulario.id ? {...x,jsonSchema,jsonData,jsonOptions} : x))
+    setFormulario(f => f ? {...f,jsonSchema,jsonData,jsonOptions} : null)
   }
 
   const cols: Column<Detalle>[] = [
@@ -3196,6 +3216,12 @@ export function DetallesList() {
               <button style={{ background:'rgba(255,255,255,.1)', border:'none', cursor:'pointer', color:'#fff', width:28, height:28, borderRadius:7, fontSize:16, display:'grid', placeItems:'center' }} onClick={()=>setMode(null)}>×</button>
             </div>
             <div style={{ padding:'20px 22px 6px' }}>
+              {errors.general && (
+                <div style={{ padding:'8px 12px', background:'#FEF2F2', border:'1.5px solid #FECACA', borderRadius:'var(--r-sm)',
+                  fontSize:12.5, color:'#B91C1C', display:'flex', alignItems:'center', gap:7, marginBottom:14 }}>
+                  <i className="fa fa-exclamation-circle" /> {errors.general}
+                </div>
+              )}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
                 <div>
                   <label style={{ display:'block', fontSize:12.5, fontWeight:600, color:'var(--ink-2)', marginBottom:5 }}>Código <span style={{ color:'var(--orange)' }}>*</span></label>

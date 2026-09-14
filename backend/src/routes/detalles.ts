@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos, type AuditCambio } from '../services/audit.js'
 
 export const detallesRouter = Router()
@@ -56,6 +56,22 @@ detallesRouter.post(
   })
 )
 
+// Un Detalle es una plantilla de formulario reutilizable — el mismo puede estar asignado a varios
+// procesos de una o más Recetas Maestras. batchRecordProgress.ts (getEstructuraProcesos,
+// recomputePorcentajeAvance) consulta su jsonSchema y su estrategiaFirma EN VIVO, nunca una foto
+// congelada — igual que la estructura de una Receta Maestra (ver recetasMaestras.ts). Editar el
+// diseño del formulario o qué firmas lo cierran, una vez que ya está en uso, cambiaría
+// retroactivamente qué ve/firma un Batch Record en ejecución o ya liberado, y podría desalinear
+// las respuestas ya guardadas (BatchRecordDetalleData.jsonData) del schema que las originó.
+async function assertDetalleSinBatchRecords(id: number) {
+  const enUso = await prisma.recetaDetalle.findFirst({
+    where: { idDetalle: id, recetaProceso: { recetaMaestra: { batchRecords: { some: {} } } } },
+  })
+  if (enUso) {
+    throw new ConflictError('Este formulario ya está en una Receta Maestra con Batch Records — no se puede modificar su diseño ni su estrategia de firma')
+  }
+}
+
 detallesRouter.put(
   '/:id',
   requireModuloEditar('detalles'),
@@ -65,6 +81,14 @@ detallesRouter.put(
     const id = Number(req.params.id)
     const anterior = await prisma.detalle.findUnique({ where: { id } })
     if (!anterior) throw new NotFoundError('Formulario no encontrado')
+
+    const { jsonSchema, jsonData, jsonOptions, idEstrategiaFirma } = parsed.data
+    const cambiaEstructura =
+      (jsonSchema !== undefined && jsonSchema !== anterior.jsonSchema) ||
+      (jsonData !== undefined && jsonData !== (anterior.jsonData ?? undefined)) ||
+      (jsonOptions !== undefined && jsonOptions !== (anterior.jsonOptions ?? undefined)) ||
+      (idEstrategiaFirma !== undefined && idEstrategiaFirma !== anterior.idEstrategiaFirma)
+    if (cambiaEstructura) await assertDetalleSinBatchRecords(id)
 
     const detalle = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.detalle.update({ where: { id }, data: parsed.data })
