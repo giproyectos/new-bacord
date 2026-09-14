@@ -8,7 +8,7 @@ export const formulaControlApi = {
     (await http.post<FormulaControl>('/formulas-control', { idOrdenProceso })).data,
   enviar: async (idFormulaControl: number): Promise<BatchRecord> =>
     (await http.post<BatchRecord>(`/formulas-control/${idFormulaControl}/enviar`)).data,
-  cancelar: async (idFormulaControl: number): Promise<void> => {
-    await http.post(`/formulas-control/${idFormulaControl}/cancelar`)
+  cancelar: async (idFormulaControl: number, motivo: string): Promise<void> => {
+    await http.post(`/formulas-control/${idFormulaControl}/cancelar`, { motivo })
   },
 }
