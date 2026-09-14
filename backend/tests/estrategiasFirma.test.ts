@@ -71,3 +71,32 @@ describe('PUT /api/estrategias-firma/:id — validación de gruposDerogacion', (
     expect(actual.gruposDerogacion).toBeNull()
   })
 })
+
+describe('POST /api/estrategias-firma — validación de firmas', () => {
+  it('rechaza un idFirma inexistente con 400 en vez de un 500 por violación de llave foránea', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post('/api/estrategias-firma')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ codigo: 'EF-FIRMA-MALA', descripcion: 'Estrategia nueva', firmas: [{ idFirma: 999999, texto: 'x', orden: 1 }] })
+
+    expect(res.status).toBe(400)
+    const creada = await prisma.estrategiaFirma.findUnique({ where: { codigo: 'EF-FIRMA-MALA' } })
+    expect(creada).toBeNull()
+  })
+
+  it('rechaza una Firma que existe pero está inactiva', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.firma.update({ where: { idFirma: esc.firma.idFirma }, data: { activo: false } })
+
+    const res = await request(app)
+      .post('/api/estrategias-firma')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ codigo: 'EF-FIRMA-INACTIVA', descripcion: 'Estrategia nueva', firmas: [{ idFirma: esc.firma.idFirma, texto: 'x', orden: 1 }] })
+
+    expect(res.status).toBe(400)
+  })
+})
