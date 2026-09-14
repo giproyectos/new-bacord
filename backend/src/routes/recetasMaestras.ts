@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
 
 export const recetasMaestrasRouter = Router()
@@ -138,6 +138,16 @@ recetasMaestrasRouter.put(
 
     const receta = await prisma.recetaMaestra.findUnique({ where: { idRecetaMaestra } })
     if (!receta) throw new NotFoundError('Receta Maestra no encontrada')
+
+    // batchRecordProgress.ts consulta la estructura de la receta EN VIVO (nunca guarda una foto al
+    // crear el Batch Record) — editarla después de que existe un Batch Record cambiaría
+    // retroactivamente qué pasos/firmas requiere un lote ya en ejecución, o incluso alteraría lo
+    // que muestra un lote ya liberado frente a lo que realmente se siguió al fabricarlo. Una vez
+    // que la receta tiene algún Batch Record, la vía correcta es versionarla con "Copiar".
+    const tieneBatchRecords = await prisma.batchRecord.findFirst({ where: { idRecetaMaestra } })
+    if (tieneBatchRecords) {
+      throw new ConflictError('Esta receta ya tiene Batch Records asociados — no se puede modificar su estructura. Cree una nueva versión con "Copiar".')
+    }
 
     const antes = await prisma.recetaProceso.findMany({
       where: { idRecetaMaestra },

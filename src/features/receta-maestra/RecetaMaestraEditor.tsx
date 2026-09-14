@@ -46,6 +46,7 @@ export function RecetaMaestraEditor() {
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [modalPaso, setModalPaso] = useState(false)
   const [modalDetalle, setModalDetalle] = useState<ProcesoItemEst | null>(null)
   const [warnPaso, setWarnPaso] = useState<ProcesoItemEst | null>(null)
@@ -126,6 +127,7 @@ export function RecetaMaestraEditor() {
   // ── Save ──────────────────────────────────────────────────────────────────
   const guardar = async () => {
     setSaving(true)
+    setSaveError('')
     try {
       const payload = procesos.map(p => ({
         idProceso: p.idProceso, orden: p.orden,
@@ -143,7 +145,11 @@ export function RecetaMaestraEditor() {
         }))
         setProcesos(mapped)
         setOpenIds(new Set(mapped.map(p => p.id)))
+      } else {
+        setSaveError(res.mensaje)
       }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'No se pudo guardar la estructura')
     } finally {
       setSaving(false)
     }
@@ -263,6 +269,13 @@ export function RecetaMaestraEditor() {
           </button>
         )}
       </div>
+
+      {saveError && (
+        <div style={{ margin: '0 0 16px', padding: '10px 14px', background: '#FEF2F2', border: '1.5px solid #FECACA',
+          borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <i className="fa fa-exclamation-circle" /> {saveError}
+        </div>
+      )}
 
       {/* ── Info card ── */}
       <div className="rme-info">
