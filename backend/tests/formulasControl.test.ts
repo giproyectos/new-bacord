@@ -46,6 +46,7 @@ describe('POST /api/formulas-control/:id/cancelar — validación de estado', ()
     const resCancelar = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ motivo: 'Intento de cancelación' })
     expect(resCancelar.status).toBe(409)
 
     const fc = await prisma.formulaControl.findUniqueOrThrow({ where: { idFormulaControl } })
@@ -70,15 +71,17 @@ describe('POST /api/formulas-control/:id/cancelar — validación de estado', ()
     const primera = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ motivo: 'Error en la orden' })
     expect(primera.status).toBe(204)
 
     const segunda = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ motivo: 'Segundo intento' })
     expect(segunda.status).toBe(409)
   })
 
-  it('permite cancelar una FC recién creada (En Tratamiento)', async () => {
+  it('permite cancelar una FC recién creada (En Tratamiento) y guarda el motivo', async () => {
     const esc = await crearEscenarioBasico()
     const token = tokenPara(esc.usuarioAdmin)
     const orden = await crearOrdenPropia(esc, 'OP-FC-TEST-3')
@@ -92,11 +95,31 @@ describe('POST /api/formulas-control/:id/cancelar — validación de estado', ()
     const res = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/cancelar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ motivo: 'Material contaminado' })
     expect(res.status).toBe(204)
 
     const fc = await prisma.formulaControl.findUniqueOrThrow({ where: { idFormulaControl } })
     expect(fc.idEstado).toBe(3)
+    expect(fc.motivoEstado).toBe('Material contaminado')
     const ordenActual = await prisma.ordenProceso.findUniqueOrThrow({ where: { idOrdenProceso: orden.idOrdenProceso } })
     expect(ordenActual.idEstado).toBe(1)
+  })
+
+  it('rechaza cancelar sin motivo', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const orden = await crearOrdenPropia(esc, 'OP-FC-TEST-4')
+
+    const resCrear = await request(app)
+      .post('/api/formulas-control')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idOrdenProceso: orden.idOrdenProceso })
+    const idFormulaControl = resCrear.body.idFormulaControl
+
+    const res = await request(app)
+      .post(`/api/formulas-control/${idFormulaControl}/cancelar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+    expect(res.status).toBe(400)
   })
 })

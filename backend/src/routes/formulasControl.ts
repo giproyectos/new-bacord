@@ -100,10 +100,14 @@ formulasControlRouter.post(
   })
 )
 
+const cancelarSchema = z.object({ motivo: z.string().min(1) })
+
 formulasControlRouter.post(
   '/:id/cancelar',
   requireModuloEditar('formulas-control'),
   asyncHandler(async (req, res) => {
+    const parsed = cancelarSchema.safeParse(req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error.message)
     const idFormulaControl = Number(req.params.id)
     const fc = await prisma.formulaControl.findUnique({ where: { idFormulaControl } })
     if (!fc) throw new NotFoundError('Fórmula de Control no encontrada')
@@ -116,11 +120,12 @@ formulasControlRouter.post(
     if (fc.idEstado !== 1) throw new ConflictError('La Fórmula de Control ya fue enviada o cancelada')
 
     await prisma.$transaction(async (tx) => {
-      await tx.formulaControl.update({ where: { idFormulaControl }, data: { idEstado: 3 } })
+      await tx.formulaControl.update({ where: { idFormulaControl }, data: { idEstado: 3, motivoEstado: parsed.data.motivo } })
       await tx.ordenProceso.update({ where: { idOrdenProceso: fc.idOrdenProceso }, data: { idEstado: 1 } })
       await logAudit(tx, {
         entidad: 'FormulaControl', idEntidad: idFormulaControl, descripcionEntidad: `FC-${idFormulaControl}`,
-        accion: 'CANCELAR', modulo: 'formulas-control', actor: await actorDe(tx, req.auth!.idUsuario),
+        accion: 'CANCELAR', modulo: 'formulas-control', motivo: parsed.data.motivo,
+        actor: await actorDe(tx, req.auth!.idUsuario),
       })
     })
     res.status(204).end()

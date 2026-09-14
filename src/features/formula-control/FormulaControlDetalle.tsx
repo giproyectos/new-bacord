@@ -27,6 +27,7 @@ export function FormulaControlDetalle() {
   const [loading, setLoading] = useState(true)
   const [accion, setAccion] = useState<'enviar' | 'cancelar' | null>(null)
   const [procesando, setProcesando] = useState(false)
+  const [motivoCancelar, setMotivoCancelar] = useState('')
 
   useEffect(() => {
     if (!id) return
@@ -47,18 +48,20 @@ export function FormulaControlDetalle() {
 
   const ejecutar = async () => {
     if (!fc || !accion) return
+    if (accion === 'cancelar' && !motivoCancelar.trim()) return
     setProcesando(true)
     try {
       if (accion === 'enviar') {
         const br = await formulaControlApi.enviar(fc.idFormulaControl)
         navigate(`/batch-records/${br.idBatchRecord}/editar`)
       } else {
-        await formulaControlApi.cancelar(fc.idFormulaControl)
+        await formulaControlApi.cancelar(fc.idFormulaControl, motivoCancelar.trim())
         navigate('/formulas-control')
       }
     } finally {
       setProcesando(false)
       setAccion(null)
+      setMotivoCancelar('')
     }
   }
 
@@ -255,7 +258,7 @@ export function FormulaControlDetalle() {
       {accion && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(10,21,48,.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={() => !procesando && setAccion(null)}>
+          onClick={() => { if (!procesando) { setAccion(null); setMotivoCancelar('') } }}>
           <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 8px 40px rgba(10,21,48,.18)',
             width: '100%', maxWidth: 440 }} onClick={e => e.stopPropagation()}>
             <div style={{ padding: '18px 24px', borderBottom: '1px solid rgba(10,21,48,.08)',
@@ -263,7 +266,7 @@ export function FormulaControlDetalle() {
               <span>
                 {accion === 'enviar' ? '¿Enviar a Producción?' : '¿Cancelar Fórmula?'}
               </span>
-              <button onClick={() => setAccion(null)} disabled={procesando}
+              <button onClick={() => { setAccion(null); setMotivoCancelar('') }} disabled={procesando}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#94A3B8' }}>×</button>
             </div>
             <div style={{ padding: '18px 24px', fontSize: 13.5, color: '#475569', lineHeight: 1.6 }}>
@@ -274,17 +277,30 @@ export function FormulaControlDetalle() {
                   los campos de los formularios que el administrador haya configurado con mapeo automático.
                 </>
               ) : (
-                <>¿Está seguro de cancelar la FC-{fc.idFormulaControl}? Esta acción no se puede deshacer.</>
+                <>
+                  <div style={{ marginBottom: 12 }}>¿Está seguro de cancelar la FC-{fc.idFormulaControl}? Esta acción no se puede deshacer.</div>
+                  <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#334155', marginBottom: 5 }}>
+                    Motivo <span style={{ color: '#DC2626' }}>*</span>
+                  </label>
+                  <textarea
+                    value={motivoCancelar}
+                    onChange={e => setMotivoCancelar(e.target.value)}
+                    rows={3}
+                    placeholder="Ingrese el motivo de la cancelación..."
+                    style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #CBD5E1', borderRadius: 8,
+                      fontSize: 13, fontFamily: 'inherit', resize: 'none' }}
+                  />
+                </>
               )}
             </div>
             <div style={{ padding: '14px 24px', borderTop: '1px solid rgba(10,21,48,.08)',
               display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn btn-gray" onClick={() => setAccion(null)} disabled={procesando}>
+              <button className="btn btn-gray" onClick={() => { setAccion(null); setMotivoCancelar('') }} disabled={procesando}>
                 <i className="fa fa-undo" /> Cancelar
               </button>
               <button
                 className={`btn ${accion === 'cancelar' ? 'btn-danger' : 'btn-primary'}`}
-                onClick={ejecutar} disabled={procesando}>
+                onClick={ejecutar} disabled={procesando || (accion === 'cancelar' && !motivoCancelar.trim())}>
                 {procesando
                   ? <><i className="fa fa-spinner fa-spin" /> Procesando...</>
                   : accion === 'enviar'
