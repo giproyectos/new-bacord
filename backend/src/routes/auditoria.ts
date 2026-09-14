@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ValidationError } from '../utils/errors.js'
+import { actorDe } from '../services/audit.js'
 
 export const auditoriaRouter = Router()
 
@@ -34,7 +35,6 @@ const registrarSchema = z.object({
   modulo: z.string(),
   cambios: z.array(cambioSchema).optional(),
   motivo: z.string().optional(),
-  firmante: z.object({ idUsuario: z.number().int(), nombreUsuario: z.string(), loginUsuario: z.string(), cargo: z.string() }).optional(),
 })
 
 auditoriaRouter.post(
@@ -42,15 +42,13 @@ auditoriaRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = registrarSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
-    const { firmante, cambios, idEntidad, ...rest } = parsed.data
+    const { cambios, idEntidad, ...rest } = parsed.data
 
-    let actor = firmante
-    if (!actor) {
-      const usuario = await prisma.usuario.findUnique({ where: { idUsuario: req.auth!.idUsuario } })
-      actor = usuario
-        ? { idUsuario: usuario.idUsuario, nombreUsuario: `${usuario.nombres} ${usuario.apellidos}`, loginUsuario: usuario.login, cargo: 'Usuario' }
-        : { idUsuario: 0, nombreUsuario: 'Sin identificar', loginUsuario: 'desconocido', cargo: 'Sin sesión activa' }
-    }
+    // El actor se deriva siempre de la sesión autenticada (req.auth), nunca del body — antes se
+    // podía enviar un `firmante` arbitrario y este endpoint lo aceptaba sin verificarlo contra
+    // la sesión real, permitiendo que cualquier usuario autenticado falsificara una entrada de
+    // auditoría atribuida a otra persona (incluso a un administrador).
+    const actor = await actorDe(prisma, req.auth!.idUsuario)
 
     const entry = await prisma.auditEntry.create({
       data: {
