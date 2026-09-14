@@ -107,6 +107,13 @@ formulasControlRouter.post(
     const idFormulaControl = Number(req.params.id)
     const fc = await prisma.formulaControl.findUnique({ where: { idFormulaControl } })
     if (!fc) throw new NotFoundError('Fórmula de Control no encontrada')
+    // A diferencia de /enviar (que sí valida idEstado !== 1), este endpoint no tenía ningún chequeo
+    // — se podía cancelar una FC ya Enviada a Producción, que ya tiene su Batch Record creado
+    // (relación 1:1, BatchRecord.idFormulaControl @unique). Eso dejaba el Batch Record huérfano
+    // (sin FC activa que lo respalde) y reseteaba la Orden de Proceso a Pendiente como si nunca se
+    // hubiera usado, permitiendo crear una segunda FC para la misma orden mientras la primera sigue
+    // en ejecución. También evita cancelar dos veces una FC ya cancelada.
+    if (fc.idEstado !== 1) throw new ConflictError('La Fórmula de Control ya fue enviada o cancelada')
 
     await prisma.$transaction(async (tx) => {
       await tx.formulaControl.update({ where: { idFormulaControl }, data: { idEstado: 3 } })
