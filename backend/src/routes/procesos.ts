@@ -28,12 +28,23 @@ const procesoSchema = z.object({
   activo: z.boolean().optional(),
 })
 
+// Los procesos (etapas de manufactura) solo se definen sobre Producto Terminado — un insumo
+// (empaque, envase, excipiente, principio activo) se consume en un proceso, no tiene los suyos.
+async function assertProductoTerminado(idMaterial: number) {
+  const material = await prisma.material.findUnique({ where: { id: idMaterial } })
+  if (!material) throw new NotFoundError('Material no encontrado')
+  if (material.tipo !== 'PRODUCTO_TERMINADO') {
+    throw new ValidationError('Los procesos solo se pueden definir sobre un material de tipo Producto Terminado')
+  }
+}
+
 procesosRouter.post(
   '/',
   requireModuloEditar('procesos'),
   asyncHandler(async (req, res) => {
     const parsed = procesoSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    await assertProductoTerminado(parsed.data.idMaterial)
     const proceso = await prisma.$transaction(async (tx) => {
       const creado = await tx.proceso.create({ data: parsed.data })
       await logAudit(tx, {
@@ -55,6 +66,9 @@ procesosRouter.put(
     const id = Number(req.params.id)
     const anterior = await prisma.proceso.findUnique({ where: { id } })
     if (!anterior) throw new NotFoundError('Proceso no encontrado')
+    if (parsed.data.idMaterial !== undefined && parsed.data.idMaterial !== anterior.idMaterial) {
+      await assertProductoTerminado(parsed.data.idMaterial)
+    }
 
     const proceso = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.proceso.update({ where: { id }, data: parsed.data })
