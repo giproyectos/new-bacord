@@ -53,8 +53,10 @@ export function UsuariosList() {
     authApi.config().then(setOidc).catch(() => setOidc({ oidcEnabled: false, oidcLabel: '' }))
   }, [])
 
+  const centrosActivos = centros.filter(c => c.activo)
+
   const openCrear = () => {
-    setForm({ ...EMPTY_FORM, IdCentro: centros[0] ? String(centros[0].id) : '' }); setEditando(null); setErrors({}); setModalCrear(true)
+    setForm({ ...EMPTY_FORM, IdCentro: centrosActivos[0] ? String(centrosActivos[0].id) : '' }); setEditando(null); setErrors({}); setModalCrear(true)
   }
   const openEditar = (r: Usuario) => {
     setForm({
@@ -325,7 +327,9 @@ export function UsuariosList() {
                   <label>Centro <span style={{ color: 'var(--orange)' }}>*</span></label>
                   <select value={form.IdCentro} onChange={e => setForm(v => ({ ...v, IdCentro: e.target.value }))}>
                     <option value="">— Seleccione —</option>
-                    {centros.map(c => <option key={c.id} value={String(c.id)}>{c.descripcion}</option>)}
+                    {centros
+                      .filter(c => c.activo || String(c.id) === form.IdCentro)
+                      .map(c => <option key={c.id} value={String(c.id)}>{c.descripcion}</option>)}
                   </select>
                   {errors.IdCentro && <div className="ul-field-err"><i className="fa fa-exclamation-circle" />{errors.IdCentro}</div>}
                 </div>
