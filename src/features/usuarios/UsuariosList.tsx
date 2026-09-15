@@ -337,7 +337,9 @@ export function UsuariosList() {
                   <label>Grupo responsable</label>
                   <select value={form.IdGrupo} onChange={e => setForm(v => ({ ...v, IdGrupo: e.target.value }))}>
                     <option value="">— Sin grupo —</option>
-                    {grupos.map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
+                    {grupos
+                      .filter(g => g.activo || String(g.id) === form.IdGrupo)
+                      .map(g => <option key={g.id} value={String(g.id)}>{g.nombre}</option>)}
                   </select>
                 </div>
               </div>

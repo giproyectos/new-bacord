@@ -18,7 +18,13 @@ export function FirmasList() {
   }).finally(() => setLoading(false))
   useEffect(() => { cargar() }, [])
 
-  const grupoOptions = grupos.map(g => ({ value: String(g.id), label: g.nombre }))
+  // CatalogPage no expone la fila en edición al calcular `options`, así que la excepción para
+  // conservar el valor ya asignado se hace contra cualquier Firma existente (no solo la que se
+  // esté editando en ese momento) — evita que una Firma ya vinculada a un grupo desactivado
+  // quede con un valor huérfano en el selector.
+  const grupoOptions = grupos
+    .filter(g => g.activo || data.some(f => f.idGrupo === g.id))
+    .map(g => ({ value: String(g.id), label: g.nombre }))
 
   return (
     <CatalogPage<FirmaApi>
