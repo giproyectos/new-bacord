@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { ValidationError, NotFoundError } from '../utils/errors.js'
+import { ConflictError, ValidationError, NotFoundError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
 
 export const procesosRouter = Router()
@@ -68,6 +68,14 @@ procesosRouter.put(
     if (!anterior) throw new NotFoundError('Proceso no encontrado')
     if (parsed.data.idMaterial !== undefined && parsed.data.idMaterial !== anterior.idMaterial) {
       await assertProductoTerminado(parsed.data.idMaterial)
+      // RecetaProceso solo guarda el idProceso, no el material — si el Proceso ya está asignado
+      // a la estructura de alguna Receta Maestra, cambiarle el material lo desacopla en silencio
+      // del producto para el que realmente fue construido: la receta sigue apuntando al mismo
+      // Proceso, pero este ahora aparece agrupado bajo otro producto en el catálogo.
+      const enUso = await prisma.recetaProceso.findFirst({ where: { idProceso: id } })
+      if (enUso) {
+        throw new ConflictError('Este proceso ya está asignado a una Receta Maestra — no se puede cambiar su material')
+      }
     }
 
     const proceso = await prisma.$transaction(async (tx) => {
