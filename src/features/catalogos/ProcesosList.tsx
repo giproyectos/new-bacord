@@ -42,14 +42,19 @@ export function ProcesosList() {
     if (!form.descripcion.trim()){ setErr('La descripción es requerida'); return }
 
     const idMaterial = Number(form.idMaterial)
-    if (modal?.mode === 'crear') {
-      const maxOrden = Math.max(0, ...procesos.filter(p => p.idMaterial === idMaterial).map(p => p.orden))
-      const res = await procesosApi.crear({ idMaterial, codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), orden: maxOrden + 1 })
-      if (!res.estado) { setErr(res.mensaje); return }
-      setOpenIds(s => new Set(s).add(idMaterial))
-    } else if (modal?.item) {
-      const res = await procesosApi.actualizar(modal.item.id, { codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), idMaterial })
-      if (!res.estado) { setErr(res.mensaje); return }
+    try {
+      if (modal?.mode === 'crear') {
+        const maxOrden = Math.max(0, ...procesos.filter(p => p.idMaterial === idMaterial).map(p => p.orden))
+        const res = await procesosApi.crear({ idMaterial, codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), orden: maxOrden + 1 })
+        if (!res.estado) { setErr(res.mensaje); return }
+        setOpenIds(s => new Set(s).add(idMaterial))
+      } else if (modal?.item) {
+        const res = await procesosApi.actualizar(modal.item.id, { codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), idMaterial })
+        if (!res.estado) { setErr(res.mensaje); return }
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'No se pudo guardar el proceso')
+      return
     }
     setModal(null)
     cargar()
