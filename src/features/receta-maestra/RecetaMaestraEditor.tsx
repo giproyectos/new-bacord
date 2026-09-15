@@ -76,7 +76,7 @@ export function RecetaMaestraEditor() {
     }).finally(() => setLoading(false))
   }, [idNum])
 
-  const procesosDisponibles = procesosCatalogo.filter(p => !procesos.some(ep => ep.idProceso === p.id))
+  const procesosDisponibles = procesosCatalogo.filter(p => p.activo && !procesos.some(ep => ep.idProceso === p.id))
 
   const toggleOpen = (pid: number) =>
     setOpenIds(s => { const n = new Set(s); n.has(pid) ? n.delete(pid) : n.add(pid); return n })
