@@ -273,9 +273,11 @@ export function CargueOPList() {
     setStep('idle'); setFile(null); setParsed(null); setExpanded(new Set())
   }
 
-  const resolverCentro = (nombre: string): number =>
-    centros.find(c => c.descripcion.toLowerCase() === nombre?.trim().toLowerCase())?.id
-      ?? centros[0]?.id ?? 0
+  const resolverCentro = (nombre: string): number => {
+    const centrosActivos = centros.filter(c => c.activo)
+    return centrosActivos.find(c => c.descripcion.toLowerCase() === nombre?.trim().toLowerCase())?.id
+      ?? centrosActivos[0]?.id ?? 0
+  }
 
   const confirmar = async () => {
     if (!parsed || !file) return

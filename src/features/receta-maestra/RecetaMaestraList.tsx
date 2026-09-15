@@ -43,7 +43,9 @@ export function RecetaMaestraList() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['recetas-maestras'] }); setModalEstado(null); setMotivo('') },
   })
 
-  const openCrear = () => { setForm({ ...EMPTY_FORM, idCentro: centros[0] ? String(centros[0].id) : '' }); setEditando(null); setError(''); setModalCrear(true) }
+  const centrosActivos = centros.filter(c => c.activo)
+
+  const openCrear = () => { setForm({ ...EMPTY_FORM, idCentro: centrosActivos[0] ? String(centrosActivos[0].id) : '' }); setEditando(null); setError(''); setModalCrear(true) }
   const openEditar = (r: RecetaMaestra) => {
     setForm({ codigo: r.codigo, descripcion: r.descripcion, version: r.version, idCentro: String(r.idCentro), idMaterial: r.idMateriales || '' })
     setEditando(r); setError(''); setModalCrear(true)
@@ -143,7 +145,9 @@ export function RecetaMaestraList() {
               <label className="field-label">Centro *</label>
               <select className="field-input" value={form.idCentro} onChange={e => setForm(f => ({ ...f, idCentro: e.target.value }))}>
                 <option value="">— Seleccione —</option>
-                {centros.map(c => <option key={c.id} value={String(c.id)}>{c.descripcion}</option>)}
+                {centros
+                  .filter(c => c.activo || String(c.id) === form.idCentro)
+                  .map(c => <option key={c.id} value={String(c.id)}>{c.descripcion}</option>)}
               </select>
               <label className="field-label">Producto {!editando && '*'}</label>
               <select className="field-input" value={form.idMaterial} onChange={e => setForm(f => ({ ...f, idMaterial: e.target.value }))} disabled={!!editando}>
