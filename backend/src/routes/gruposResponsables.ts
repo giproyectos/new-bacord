@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { ValidationError, NotFoundError } from '../utils/errors.js'
+import { ConflictError, ValidationError, NotFoundError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
 
 export const gruposResponsablesRouter = Router()
@@ -42,6 +42,25 @@ gruposResponsablesRouter.post(
   })
 )
 
+// EstrategiaFirma.gruposDerogacion (ver estrategiasFirma.ts) guarda los grupos autorizados a
+// derogar una firma como un CSV de NOMBRES, no de ids. Renombrar un grupo ya referenciado ahí
+// dejaría esa referencia apuntando a un nombre que ya no existe — la autorización de derogación
+// se rompería en silencio, recién visible cuando alguien intente derogar una firma y no pueda.
+async function assertNombreSinUsoEnDerogacion(nombreAnterior: string) {
+  const estrategias = await prisma.estrategiaFirma.findMany({
+    where: { gruposDerogacion: { contains: nombreAnterior } },
+    select: { codigo: true, gruposDerogacion: true },
+  })
+  const enUso = estrategias.filter((e) =>
+    (e.gruposDerogacion ?? '').split(',').map((s) => s.trim()).includes(nombreAnterior)
+  )
+  if (enUso.length > 0) {
+    throw new ConflictError(
+      `No se puede renombrar: el grupo "${nombreAnterior}" está autorizado para derogar firmas en la(s) estrategia(s) ${enUso.map((e) => e.codigo).join(', ')} — quite esa autorización antes de renombrarlo`
+    )
+  }
+}
+
 gruposResponsablesRouter.put(
   '/:id',
   requireModuloEditar('grupos-responsables'),
@@ -51,6 +70,9 @@ gruposResponsablesRouter.put(
     const id = Number(req.params.id)
     const anterior = await prisma.grupoResponsable.findUnique({ where: { id } })
     if (!anterior) throw new NotFoundError('Grupo no encontrado')
+    if (parsed.data.nombre !== undefined && parsed.data.nombre !== anterior.nombre) {
+      await assertNombreSinUsoEnDerogacion(anterior.nombre)
+    }
 
     const grupo = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.grupoResponsable.update({ where: { id }, data: parsed.data })
