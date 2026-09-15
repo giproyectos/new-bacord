@@ -278,9 +278,11 @@ export function ProcesosList() {
                 <label>Producto <span style={{ color:'var(--orange)' }}>*</span></label>
                 <select value={form.idMaterial} onChange={e => { setForm(v => ({ ...v, idMaterial: e.target.value })); setErr('') }}>
                   <option value="">— Seleccione un producto —</option>
-                  {materiales.map(m => (
-                    <option key={m.id} value={String(m.id)}>{m.descripcion} ({m.codigo})</option>
-                  ))}
+                  {materiales
+                    .filter(m => m.activo || m.id === modal.item?.idMaterial)
+                    .map(m => (
+                      <option key={m.id} value={String(m.id)}>{m.descripcion} ({m.codigo})</option>
+                    ))}
                 </select>
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:12 }}>

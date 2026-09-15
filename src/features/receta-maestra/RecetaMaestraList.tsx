@@ -149,7 +149,7 @@ export function RecetaMaestraList() {
               <select className="field-input" value={form.idMaterial} onChange={e => setForm(f => ({ ...f, idMaterial: e.target.value }))} disabled={!!editando}>
                 <option value="">— Seleccione —</option>
                 {materiales
-                  .filter(m => editando || m.tipo === 'PRODUCTO_TERMINADO')
+                  .filter(m => editando || (m.activo && m.tipo === 'PRODUCTO_TERMINADO'))
                   .map(m => <option key={m.id} value={String(m.id)}>{m.descripcion} ({m.codigo})</option>)}
               </select>
               {!editando && (
