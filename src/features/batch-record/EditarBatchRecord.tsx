@@ -169,60 +169,6 @@ function extractFieldLabels(schema: string): Record<string, string> {
   return labels
 }
 
-// Formatea un valor de form.io para mostrarlo de forma legible en auditoría / impresión
-function formatAuditValue(v: unknown): string {
-  if (v === null || v === undefined || v === '') return ''
-  if (typeof v === 'boolean') return v ? 'Sí' : 'No'
-  if (typeof v !== 'object') return String(v)
-
-  if (Array.isArray(v)) {
-    const rows = (v as Record<string, unknown>[]).filter(r => r && typeof r === 'object')
-    if (rows.length === 0) return '—'
-    const lines = rows.map((row, i) => {
-      const parts = Object.entries(row)
-        .filter(([k, rv]) =>
-          !k.startsWith('btn') &&
-          rv !== '' && rv !== null && rv !== undefined && rv !== false && rv !== '—'
-        )
-        .map(([, rv]) => String(rv))
-      return parts.length > 0 ? `[${i + 1}] ${parts.join(' · ')}` : null
-    }).filter(Boolean)
-    return lines.length > 0 ? lines.join('\n') : `${rows.length} fila(s)`
-  }
-
-  // Objeto plano
-  return Object.entries(v as Record<string, unknown>)
-    .filter(([k, ov]) => !k.startsWith('btn') && ov !== null && ov !== undefined && ov !== '')
-    .map(([, ov]) => String(ov))
-    .join(' · ') || '—'
-}
-
-// Diff plano entre dos snapshots de data form.io → cambios auditables
-function diffFormData(
-  prev: Record<string, unknown>,
-  next: Record<string, unknown>,
-  labels: Record<string, string>
-): { campo: string; etiqueta: string; valorAnterior: string; valorNuevo: string }[] {
-  const cambios: { campo: string; etiqueta: string; valorAnterior: string; valorNuevo: string }[] = []
-  const allKeys = new Set([...Object.keys(prev), ...Object.keys(next)])
-  for (const key of allKeys) {
-    if (key === 'submit' || key.startsWith('btn')) continue  // botones no son datos auditables
-    const ant = prev[key]
-    const nv  = next[key]
-    const antJson = typeof ant === 'object' ? JSON.stringify(ant) : String(ant ?? '')
-    const nvJson  = typeof nv  === 'object' ? JSON.stringify(nv)  : String(nv  ?? '')
-    if (antJson !== nvJson) {
-      cambios.push({
-        campo: key,
-        etiqueta: labels[key] ?? key,
-        valorAnterior: formatAuditValue(ant),
-        valorNuevo:    formatAuditValue(nv),
-      })
-    }
-  }
-  return cambios
-}
-
 // ── FirmaStamp ─────────────────────────────────────────────────────────────
 function FirmaStamp({ info }: { info: FirmaInfo }) {
   return (
@@ -1689,27 +1635,23 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   } as const
   const estadoBadge = ESTADO_BADGE[(br?.idEstado ?? 1) as keyof typeof ESTADO_BADGE] ?? ESTADO_BADGE[1]
 
+  // El guardado (PUT /detalles/:idDetalle) ahora calcula su propio diff y registra la auditoría
+  // en el servidor, dentro de la misma transacción — así el rastro de qué campo cambió nunca
+  // depende de una segunda solicitud aparte que podía fallar en silencio o simplemente no
+  // enviarse. `labels` viaja junto con el guardado solo para que la auditoría muestre el nombre
+  // legible del campo en vez de su key interna del schema Form.io.
   const handleFormData = (
     detalleId: number,
-    prev: Record<string, unknown>,
+    _prev: Record<string, unknown>,
     next: Record<string, unknown>,
     labels: Record<string, string>
   ) => {
     setDetalleDatos(d => ({ ...d, [detalleId]: next }))
     if (!readonly) {
-      batchRecordApi.guardarDetalle(idNum, detalleId, JSON.stringify(next)).catch(err => console.error('No se pudo guardar el formulario', err))
+      batchRecordApi.guardarDetalle(idNum, detalleId, JSON.stringify(next), labels)
+        .then(() => setAuditVersion(v => v + 1))
+        .catch(err => console.error('No se pudo guardar el formulario', err))
     }
-    const cambios = diffFormData(prev, next, labels)
-    if (!cambios.length) return
-    const det = detalleStruct.find(d => d.id === detalleId)
-    registrar({
-      entidad: 'DetalleValores',
-      idEntidad: idNum,
-      descripcionEntidad: det?.descripcion ?? `Detalle ${detalleId}`,
-      accion: 'MODIFICAR',
-      modulo: 'batch-record',
-      cambios,
-    })
   }
 
   const handleDesviacion = async (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => {

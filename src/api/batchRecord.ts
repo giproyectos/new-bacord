@@ -83,8 +83,11 @@ export const batchRecordApi = {
   getDetalles: async (idBatchRecord: number): Promise<BatchRecordDetalleData[]> =>
     (await http.get<BatchRecordDetalleData[]>(`/batch-records/${idBatchRecord}/detalles`)).data,
 
-  guardarDetalle: async (idBatchRecord: number, idDetalle: number, jsonData: string): Promise<Resultado<BatchRecordDetalleData>> =>
-    (await http.put<Resultado<BatchRecordDetalleData>>(`/batch-records/${idBatchRecord}/detalles/${idDetalle}`, { jsonData })).data,
+  // `labels` es solo cosmético — el backend calcula el diff (qué campo cambió y sus valores) a
+  // partir de lo que ya tenía guardado, así que un `labels` fabricado como mucho deja una
+  // etiqueta con mal nombre, nunca un cambio inventado o un cambio real oculto.
+  guardarDetalle: async (idBatchRecord: number, idDetalle: number, jsonData: string, labels?: Record<string, string>): Promise<Resultado<BatchRecordDetalleData>> =>
+    (await http.put<Resultado<BatchRecordDetalleData>>(`/batch-records/${idBatchRecord}/detalles/${idDetalle}`, { jsonData, labels })).data,
 
   getProcesosCerrados: async (idBatchRecord: number): Promise<BatchRecordProcesoCierre[]> =>
     (await http.get<BatchRecordProcesoCierre[]>(`/batch-records/${idBatchRecord}/procesos-cerrados`)).data,
