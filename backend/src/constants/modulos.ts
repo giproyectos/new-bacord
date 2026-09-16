@@ -7,7 +7,6 @@ export const MODULOS = [
   { clave: 'recetas-maestras',    label: 'Recetas Maestras' },
   { clave: 'materiales',          label: 'Materiales' },
   { clave: 'procesos',            label: 'Procesos' },
-  { clave: 'parametros',          label: 'Parámetros' },
   { clave: 'centros',             label: 'Centros' },
   { clave: 'grupos-responsables', label: 'Grupos Responsables' },
   { clave: 'detalles',            label: 'Formularios' },
