@@ -92,7 +92,6 @@ export function MaterialesList() {
 export function ParametrosList() {
   const [data, setData] = useState<Parametro[]>([])
   const [loading, setLoading] = useState(true)
-  const puedeEditar = usePuedeEditar('parametros')
   const cargar = () => parametrosApi.listar().then(setData).finally(() => setLoading(false))
   useEffect(() => { cargar() }, [])
 
@@ -101,8 +100,6 @@ export function ParametrosList() {
       panelTitle="Lista de parámetros"
       data={data}
       loading={loading}
-      canCreate={puedeEditar}
-      canEdit={puedeEditar}
       columns={[
         { key: 'nombre',      header: 'Nombre',      width: '25%' },
         { key: 'valor',       header: 'Valor',       width: '15%' },

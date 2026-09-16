@@ -41,7 +41,9 @@ app.use('/api/procesos', requireAuth, requireModulo('procesos'), procesosRouter)
 app.use('/api/firmas', requireAuth, requireModulo('firmas'), firmasRouter)
 app.use('/api/estrategias-firma', requireAuth, requireModulo('estrategias-firma'), estrategiasFirmaRouter)
 app.use('/api/detalles', requireAuth, requireModulo('detalles'), detallesRouter)
-// Usuarios y Roles administran cuentas y permisos — quedan reservados a esAdministrador (ver requireAdmin en cada router).
+// Usuarios, Roles y Parámetros quedan reservados a esAdministrador (ver requireAdmin en cada
+// router) — Parámetros sostiene la política de contraseña y el timeout de sesión, tan sensible
+// como quién puede acceder a qué, así que no se gobierna por el sistema de módulos por Rol.
 app.use('/api/usuarios', requireAuth, usuariosRouter)
 app.use('/api/roles', requireAuth, rolesRouter)
 app.use('/api/recetas-maestras', requireAuth, requireModulo('recetas-maestras'), recetasMaestrasRouter)
@@ -50,6 +52,6 @@ app.use('/api/formulas-control', requireAuth, requireModulo('formulas-control'),
 app.use('/api/batch-records', requireAuth, requireModulo('batch-records'), batchRecordsRouter)
 app.use('/api/desviaciones', requireAuth, requireModulo('batch-records'), desviacionesRouter)
 app.use('/api/auditoria', requireAuth, auditoriaRouter)
-app.use('/api/parametros', requireAuth, requireModulo('parametros'), parametrosRouter)
+app.use('/api/parametros', requireAuth, parametrosRouter)
 
 app.use(errorHandler)

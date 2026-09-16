@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
-import { requireModuloEditar } from '../middleware/auth.js'
+import { requireAdmin } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ValidationError, NotFoundError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
@@ -12,6 +12,7 @@ const ETIQUETAS = { nombre: 'Nombre', valor: 'Valor', descripcion: 'Descripción
 
 parametrosRouter.get(
   '/',
+  requireAdmin,
   asyncHandler(async (_req, res) => {
     res.json(await prisma.parametro.findMany({ orderBy: { nombre: 'asc' } }))
   })
@@ -25,7 +26,7 @@ const parametroSchema = z.object({
 
 parametrosRouter.post(
   '/',
-  requireModuloEditar('parametros'),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const parsed = parametroSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
@@ -43,7 +44,7 @@ parametrosRouter.post(
 
 parametrosRouter.put(
   '/:id',
-  requireModuloEditar('parametros'),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const parsed = parametroSchema.partial().safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
@@ -68,7 +69,7 @@ parametrosRouter.put(
 
 parametrosRouter.delete(
   '/:id',
-  requireModuloEditar('parametros'),
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id)
     const anterior = await prisma.parametro.findUnique({ where: { id } })

@@ -43,9 +43,9 @@ const NAV_ALL: NavItem[] = [
         ],
       },
       { label: 'Procesos',            icon: 'fa-cogs',      to: '/administracion/procesos', modulo: 'procesos' },
-      // Antes oculto por ser un catálogo huérfano — ahora sostiene la sesión de inactividad y
-      // la política de contraseña (rotación y complejidad), configurables por cliente.
-      { label: 'Parámetros',          icon: 'fa-sliders-h', to: '/administracion/parametros', modulo: 'parametros' },
+      // Sostiene la sesión de inactividad y la política de contraseña (rotación y complejidad).
+      // Sin `modulo`: exclusivo de administrador, igual que Roles/Usuarios (ver filtrarNav).
+      { label: 'Parámetros',          icon: 'fa-sliders-h', to: '/administracion/parametros' },
     ],
   },
   {
