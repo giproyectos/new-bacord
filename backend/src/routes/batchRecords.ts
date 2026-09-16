@@ -222,10 +222,25 @@ batchRecordsRouter.post(
       }
     }
 
-    const cierre = await prisma.batchRecordProcesoCierre.upsert({
+    const yaCerrada = await prisma.batchRecordProcesoCierre.findUnique({
       where: { idBatchRecord_idProceso: { idBatchRecord, idProceso } },
-      update: {},
-      create: { idBatchRecord, idProceso, idUsuario: req.auth!.idUsuario },
+    })
+
+    const cierre = await prisma.$transaction(async (tx) => {
+      const guardado = await tx.batchRecordProcesoCierre.upsert({
+        where: { idBatchRecord_idProceso: { idBatchRecord, idProceso } },
+        update: {},
+        create: { idBatchRecord, idProceso, idUsuario: req.auth!.idUsuario },
+      })
+      if (!yaCerrada) {
+        await logAudit(tx, {
+          entidad: 'BatchRecord', idEntidad: idBatchRecord,
+          descripcionEntidad: `BR-${idBatchRecord} · Etapa ${estructura[idx].proceso.codigo} — ${estructura[idx].proceso.descripcion}`,
+          accion: 'MODIFICAR', modulo: 'batch-record', motivo: 'Etapa cerrada',
+          actor: await actorDe(tx, req.auth!.idUsuario),
+        })
+      }
+      return guardado
     })
     res.json({ estado: true, mensaje: 'Etapa cerrada', datos: cierre })
   })
