@@ -321,11 +321,14 @@ authRouter.post(
 
     // Para configurarlo por primera vez basta con tener sesión activa; para cambiar uno ya
     // existente se exige el PIN actual — evita que alguien con la sesión abierta de otro
-    // (equipo compartido en planta) le cambie el PIN de firma sin su consentimiento.
+    // (equipo compartido en planta) le cambie el PIN de firma sin su consentimiento. Se valida
+    // con verificarPin (el mismo servicio que usa firmar/validar-firma) en vez de comparar el
+    // hash directo, para que también aquí cuenten los intentos fallidos y aplique el bloqueo —
+    // sin esto, este endpoint era una vía sin límite de intentos para adivinar el PIN de otro.
     if (usuario.pinHash) {
       if (!pinActual) return res.json({ estado: false, mensaje: 'Debe indicar el PIN actual para cambiarlo' })
-      const actualOk = await bcrypt.compare(pinActual, usuario.pinHash)
-      if (!actualOk) return res.json({ estado: false, mensaje: 'El PIN actual no es correcto' })
+      const actualCheck = await verificarPin(prisma, usuario, pinActual)
+      if (!actualCheck.ok) return res.json({ estado: false, mensaje: actualCheck.mensaje })
     }
 
     const pinHash = await bcrypt.hash(pinNuevo, 12)
