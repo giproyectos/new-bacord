@@ -207,13 +207,20 @@ const SESION_ACCIONES: AuditAccion[] = ['LOGIN', 'LOGIN_FALLIDO', 'LOGOUT']
 
 const PAGE = 25
 
+const LIMITE_CONSULTA = 5000
+
 function LogTable({ acciones, emptyMsg }: { acciones: AuditAccion[]; emptyMsg: string }) {
   const [allEntries, setAllEntries] = useState<AuditEntry[]>([])
   const searchRef   = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    auditoriaApi.consultar().then(setAllEntries).catch(() => setAllEntries([]))
+    auditoriaApi.consultar({ limite: LIMITE_CONSULTA }).then(setAllEntries).catch(() => setAllEntries([]))
   }, [])
+
+  // Si vinieron exactamente LIMITE_CONSULTA registros, es probable que el backend haya cortado
+  // el resultado — sin este aviso, un historial más largo que el límite queda invisible en
+  // pantalla sin que nadie note que falta algo (los datos siguen intactos en la base de datos).
+  const posibleTruncado = allEntries.length >= LIMITE_CONSULTA
 
   const [q, setQ]               = useState('')
   const [accionF, setAccionF]   = useState('')
@@ -360,6 +367,19 @@ function LogTable({ acciones, emptyMsg }: { acciones: AuditAccion[]; emptyMsg: s
       `}</style>
 
       <div className="al-page">
+
+        {/* ── Aviso de posible truncado ── */}
+        {posibleTruncado && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
+            background: '#FFFBEB', border: '1.5px solid #FDE68A', borderRadius: 'var(--r-md)',
+            fontSize: 12.5, color: '#78350F' }}>
+            <i className="fa fa-exclamation-triangle" style={{ color: '#D97706', marginTop: 2, flexShrink: 0 }} aria-hidden="true" />
+            <div>
+              <strong>Puede haber más eventos de los que se muestran.</strong> Se alcanzó el límite de {LIMITE_CONSULTA.toLocaleString('es-CO')} registros
+              para esta consulta — usa los filtros de fecha para acotar el rango y ver el historial completo de un período.
+            </div>
+          </div>
+        )}
 
         {/* ── Summary strip ── */}
         {base.length > 0 && (
