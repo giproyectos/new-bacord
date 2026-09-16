@@ -46,6 +46,9 @@ describe('POST /api/desviaciones', () => {
     const evento = await prisma.auditEntry.findFirstOrThrow({ where: { accion: 'REGISTRAR_DESVIACION' } })
     expect(evento.entidad).toBe('Desviacion')
     expect(evento.motivo).toBe('Justificación de la desviación')
+    // idEntidad es el idBatchRecord (no el id propio de la Desviacion) para que el evento
+    // aparezca en el panel de auditoría embebido en el Batch Record.
+    expect(evento.idEntidad).toBe(String(esc.batchRecord.idBatchRecord))
   })
 })
 
@@ -65,6 +68,7 @@ describe('POST /api/desviaciones/:id/cerrar', () => {
 
     const evento = await prisma.auditEntry.findFirstOrThrow({ where: { accion: 'CERRAR_DESVIACION' } })
     expect(evento.entidad).toBe('Desviacion')
+    expect(evento.idEntidad).toBe(String(esc.batchRecord.idBatchRecord))
   })
 
   it('rechaza cerrarla a un usuario que no pertenece al grupo configurado (Calidad por defecto)', async () => {

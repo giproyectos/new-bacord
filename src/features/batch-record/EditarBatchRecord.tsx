@@ -1193,13 +1193,19 @@ const AUDIT_CFG: Record<string, { bg: string; color: string; border: string; lab
   LIBERAR_LOTE:   { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Liberación',   icon:'fa-unlock' },
 }
 
+// idEntidad no es único entre tipos de entidad — un idUsuario de Sesion, un id de Material, etc.
+// pueden coincidir numéricamente con un idBatchRecord por pura casualidad. Estas son las únicas
+// entidades cuyo idEntidad de verdad es un idBatchRecord (ver logAudit en batchRecords.ts y
+// desviaciones.ts); filtrar por esta lista en vez de solo excluir 'Sesion' evita tanto mostrar
+// eventos ajenos con el mismo id numérico como, si mañana se agrega una entidad nueva, que
+// aparezca sin querer en el panel de un Batch Record.
+const ENTIDADES_DE_BR = new Set(['BatchRecord', 'DetalleValores', 'FirmaSeccion', 'FirmaCierre', 'Desviacion'])
+
 function useBrAudit(brId: string | number | undefined, refreshKey: number) {
   const [entries, setEntries] = useState<AuditEntry[]>([])
   useEffect(() => {
     if (!brId) return
-    // idEntidad no es único entre tipos de entidad (un idUsuario de Sesion puede coincidir
-    // numéricamente con un idBatchRecord) — se excluyen eventos de Sesion, que nunca pertenecen a un BR.
-    auditoriaApi.consultar({ idEntidad: brId }).then(all => setEntries(all.filter(e => e.entidad !== 'Sesion'))).catch(() => setEntries([]))
+    auditoriaApi.consultar({ idEntidad: brId }).then(all => setEntries(all.filter(e => ENTIDADES_DE_BR.has(e.entidad)))).catch(() => setEntries([]))
   }, [brId, refreshKey])
   return entries
 }
