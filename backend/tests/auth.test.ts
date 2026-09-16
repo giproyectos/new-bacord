@@ -3,7 +3,7 @@ import request from 'supertest'
 import bcrypt from 'bcryptjs'
 import { app } from '../src/app.js'
 import { resetDb, prisma } from './helpers/db.js'
-import { crearEscenarioBasico } from './helpers/fixtures.js'
+import { crearEscenarioBasico, PIN_PLANO } from './helpers/fixtures.js'
 import { tokenPara } from './helpers/auth.js'
 import { signToken } from '../src/middleware/auth.js'
 
@@ -72,6 +72,46 @@ describe('requireAuth — revalidación contra la base de datos', () => {
 
     const despues = await request(app).get('/api/batch-records').set('Authorization', `Bearer ${token}`)
     expect(despues.status).toBe(403)
+  })
+})
+
+describe('POST /api/auth/pin — cambiar el PIN respeta el bloqueo por intentos fallidos', () => {
+  it('bloquea el PIN tras 5 intentos con el pinActual incorrecto, igual que al firmar', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app)
+        .post('/api/auth/pin')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ pinActual: '000000', pinNuevo: '999999' })
+      expect(res.body.estado).toBe(false)
+    }
+
+    const usuario = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: esc.usuarioAdmin.idUsuario } })
+    expect(usuario.pinBloqueado).toBe(true)
+
+    // Ni siquiera el pinActual correcto puede cambiarlo ya bloqueado.
+    const res = await request(app)
+      .post('/api/auth/pin')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ pinActual: PIN_PLANO, pinNuevo: '999999' })
+    expect(res.body.estado).toBe(false)
+    expect(res.body.mensaje).toMatch(/bloqueado/i)
+  })
+
+  it('permite cambiar el PIN con el pinActual correcto', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post('/api/auth/pin')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ pinActual: PIN_PLANO, pinNuevo: '999999' })
+
+    expect(res.body.estado).toBe(true)
+    const usuario = await prisma.usuario.findUniqueOrThrow({ where: { idUsuario: esc.usuarioAdmin.idUsuario } })
+    expect(await bcrypt.compare('999999', usuario.pinHash!)).toBe(true)
   })
 })
 
