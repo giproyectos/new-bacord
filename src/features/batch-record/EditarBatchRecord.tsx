@@ -513,7 +513,7 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
 // ── FormioFrame ───────────────────────────────────────────────────────────
 interface FormioRangeError { key: string; label: string; message: string }
 
-function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDataChange, getInitialData, onValidation }: {
+function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDataChange, getInitialData, onValidation, onFieldFocus, onFieldBlur }: {
   schema: string
   language?: string
   locked?: boolean
@@ -521,11 +521,15 @@ function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDa
   onDataChange?: (data: Record<string, unknown>) => void
   getInitialData?: () => Record<string, unknown>
   onValidation?: (errors: FormioRangeError[]) => void
+  onFieldFocus?: (key: string) => void
+  onFieldBlur?: () => void
 }) {
   const ref = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(500)
   const onDataChangeRef = useRef(onDataChange)
   const onValidationRef = useRef<((errors: FormioRangeError[]) => void) | undefined>(onValidation)
+  const onFieldFocusRef = useRef(onFieldFocus)
+  const onFieldBlurRef = useRef(onFieldBlur)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lockedRef = useRef(false)
   const getInitialDataRef = useRef(getInitialData)
@@ -533,6 +537,8 @@ function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDa
   useEffect(() => { onDataChangeRef.current = onDataChange }, [onDataChange])
   useEffect(() => { onValidationRef.current = onValidation }, [onValidation])
   useEffect(() => { getInitialDataRef.current = getInitialData }, [getInitialData])
+  useEffect(() => { onFieldFocusRef.current = onFieldFocus }, [onFieldFocus])
+  useEffect(() => { onFieldBlurRef.current = onFieldBlur }, [onFieldBlur])
 
   useEffect(() => {
     if (locked && !lockedRef.current) {
@@ -586,6 +592,12 @@ function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDa
       }
       if (e.data?.type === 'VALIDATION_STATUS') {
         onValidationRef.current?.(e.data.errors ?? [])
+      }
+      if (e.data?.type === 'FIELD_FOCUS' && typeof e.data.key === 'string') {
+        onFieldFocusRef.current?.(e.data.key)
+      }
+      if (e.data?.type === 'FIELD_BLUR') {
+        onFieldBlurRef.current?.()
       }
     }
     window.addEventListener('message', onMsg)
@@ -772,7 +784,7 @@ function DesviacionModal({ error, valorIngresado, detalleCode, onSubmit, onClose
 }
 
 // ── DetalleCard ───────────────────────────────────────────────────────────
-function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, onRequestCerrarDesviacion, preLlenado }: {
+function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, onRequestCerrarDesviacion, preLlenado, onCampoActivo }: {
   detalle: DetalleRow
   readonly: boolean
   firmados: FirmaMap
@@ -785,6 +797,9 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   onDesviacion?: (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => void
   onRequestCerrarDesviacion?: (desviacion: Desviacion) => void
   preLlenado?: PreLlenadoBR | null
+  // Etiqueta legible del campo que tiene el foco ahora mismo en este formulario (o null al
+  // salir de todos) — alimenta el resaltado dinámico del panel de auditoría.
+  onCampoActivo?: (etiqueta: string | null) => void
 }) {
   const user = useAuthStore(s => s.user)
   const [open, setOpen] = useState(false)
@@ -908,7 +923,13 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
       {/* ── Content ── */}
       {open && (
         <div style={{ borderTop: '1px solid rgba(10,21,48,0.07)' }}>
-          <FormioFrame schema={detalle.jsonSchema ?? ''} language={languageOfDetalle(detalle.jsonOptions)} locked={cierFirmadas > 0} lockedKeys={lockedKeys} onDataChange={handleIframeData} getInitialData={getInitialData} onValidation={setRangeErrors} />
+          <FormioFrame
+            schema={detalle.jsonSchema ?? ''} language={languageOfDetalle(detalle.jsonOptions)}
+            locked={cierFirmadas > 0} lockedKeys={lockedKeys} onDataChange={handleIframeData}
+            getInitialData={getInitialData} onValidation={setRangeErrors}
+            onFieldFocus={key => onCampoActivo?.(labelsRef.current[key] ?? key)}
+            onFieldBlur={() => onCampoActivo?.(null)}
+          />
 
           {/* ── Range errors from form.io ── */}
           {rangeErrors.length > 0 && (
@@ -1283,9 +1304,40 @@ function EntradaEvento({ entry: e }: { entry: AuditEntry }) {
   )
 }
 
+// Una transición de valor de un campo (anterior → nuevo, quién, cuándo) — se reutiliza tanto en
+// las tarjetas agrupadas por campo como en la vista de "campo activo" (foco en vivo).
+function CampoTransicion({ entry, cambio, atenuado }: { entry: AuditEntry; cambio: AuditCambio; atenuado?: boolean }) {
+  const { fecha, hora } = fmtFechaHora(entry.timestamp)
+  return (
+    <div className="audit-field-row" style={atenuado ? { opacity: 0.7 } : undefined}>
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: atenuado ? 'rgba(255,255,255,0.25)' : '#F7C92E', flexShrink: 0, marginTop: 5 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
+          <span className="audit-val audit-val-ant" title={cambio.valorAnterior || '—'}>{cambio.valorAnterior || '—'}</span>
+          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
+          <span className="audit-val audit-val-nv" title={cambio.valorNuevo || '—'}>{cambio.valorNuevo || '—'}</span>
+        </div>
+        <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {entry.nombreUsuario}
+        </div>
+        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
+          {fecha} · {hora}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type VistaAudit = 'campos' | 'todo'
 
-function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refreshKey: number }) {
+function AuditPreviewPanel({ brId, refreshKey, campoActivo }: {
+  brId: string | number
+  refreshKey: number
+  // Etiqueta del campo que tiene el foco ahora mismo en el formulario — mientras esté presente,
+  // el panel muestra solo el historial de ese campo, en vivo; al salir del campo (null), vuelve
+  // a la vista normal (pestañas Por Campo / Todo) tal como quedó.
+  campoActivo?: string | null
+}) {
   const entries = useBrAudit(brId, refreshKey)
   const [busqueda, setBusqueda] = useState('')
   const [vista, setVista] = useState<VistaAudit>('campos')
@@ -1308,6 +1360,12 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
 
   // Eventos sin un "campo" al que agruparse: acceso al BR, firmas, cierres de etapa, desviaciones.
   const eventosSinCambios = useMemo(() => entries.filter(e => !e.cambios || e.cambios.length === 0), [entries])
+
+  // El grupo del campo con foco ahora mismo, si ya tiene algún cambio registrado.
+  const grupoActivo = useMemo(
+    () => (campoActivo ? camposAgrupados.find(g => g.campo === campoActivo) ?? null : null),
+    [campoActivo, camposAgrupados]
+  )
 
   const q = busqueda.trim().toLowerCase()
   const coincide = (...partes: (string | undefined)[]) => !q || partes.some(p => p?.toLowerCase().includes(q))
@@ -1362,6 +1420,12 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
           font-size: 10px; font-weight: 700; font-family: var(--f-mono); color: #F7C92E;
           background: rgba(247,201,46,0.12); padding: 1px 6px; border-radius: 8px;
         }
+        .audit-campo-activo-banner {
+          display: flex; align-items: center; gap: 7px; padding: 9px 14px;
+          background: rgba(247,201,46,0.1); border-bottom: 1px solid rgba(247,201,46,0.2);
+          font-size: 11.5px; color: #F7C92E; font-weight: 600;
+        }
+        .audit-campo-activo-banner span { color: #fff; }
         @media (prefers-reduced-motion: reduce) { .audit-entry, .audit-tab { transition: none; } }
       `}</style>
 
@@ -1376,24 +1440,30 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
       </div>
 
       {entries.length > 0 && (
-        <>
-          <div className="audit-tabs" role="tablist" aria-label="Vista del historial">
-            <button role="tab" aria-selected={vista === 'campos'} className={`audit-tab${vista === 'campos' ? ' activo' : ''}`} onClick={() => setVista('campos')}>
-              <i className="fa fa-stream" style={{ fontSize: 10 }} aria-hidden="true" /> Por Campo
-            </button>
-            <button role="tab" aria-selected={vista === 'todo'} className={`audit-tab${vista === 'todo' ? ' activo' : ''}`} onClick={() => setVista('todo')}>
-              <i className="fa fa-list" style={{ fontSize: 10 }} aria-hidden="true" /> Todo
-            </button>
+        campoActivo ? (
+          <div className="audit-campo-activo-banner">
+            <i className="fa fa-crosshairs" aria-hidden="true" /> Editando <span>{campoActivo}</span>
           </div>
-          <div className="audit-filters">
-            <input
-              type="text"
-              placeholder="Buscar por usuario, campo, valor…"
-              value={busqueda}
-              onChange={e => setBusqueda(e.target.value)}
-            />
-          </div>
-        </>
+        ) : (
+          <>
+            <div className="audit-tabs" role="tablist" aria-label="Vista del historial">
+              <button role="tab" aria-selected={vista === 'campos'} className={`audit-tab${vista === 'campos' ? ' activo' : ''}`} onClick={() => setVista('campos')}>
+                <i className="fa fa-stream" style={{ fontSize: 10 }} aria-hidden="true" /> Por Campo
+              </button>
+              <button role="tab" aria-selected={vista === 'todo'} className={`audit-tab${vista === 'todo' ? ' activo' : ''}`} onClick={() => setVista('todo')}>
+                <i className="fa fa-list" style={{ fontSize: 10 }} aria-hidden="true" /> Todo
+              </button>
+            </div>
+            <div className="audit-filters">
+              <input
+                type="text"
+                placeholder="Buscar por usuario, campo, valor…"
+                value={busqueda}
+                onChange={e => setBusqueda(e.target.value)}
+              />
+            </div>
+          </>
+        )
       )}
 
       <div style={{ flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
@@ -1405,6 +1475,16 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
               Las firmas y cambios en campos<br />aparecen aquí en tiempo real.
             </div>
           </div>
+        ) : campoActivo ? (
+          // Foco en un campo del formulario: solo su historial, más reciente primero — sin
+          // pestañas ni búsqueda, es una vista en vivo, no de navegación.
+          !grupoActivo || grupoActivo.cambios.length === 0 ? (
+            <div style={{ padding: '30px 16px', textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>Aún no se ha modificado este campo.</div>
+            </div>
+          ) : grupoActivo.cambios.map(({ entry, cambio }, i) => (
+            <CampoTransicion key={i} entry={entry} cambio={cambio} atenuado={i > 0} />
+          ))
         ) : vista === 'campos' ? (
           <>
             {eventosFiltrados.map(e => <EntradaEvento key={e.id} entry={e} />)}
@@ -1419,7 +1499,6 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
             ) : camposFiltrados.map(g => {
               const [ultimo, ...resto] = g.cambios
               const abierto = campoAbierto === g.campo
-              const { fecha, hora } = fmtFechaHora(ultimo.entry.timestamp)
               return (
                 <div key={g.campo} className="audit-campo-card">
                   <button
@@ -1434,44 +1513,11 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
                     )}
                   </button>
                   {/* Último cambio: siempre visible, sin necesidad de expandir nada. */}
-                  <div className="audit-field-row">
-                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F7C92E', flexShrink: 0, marginTop: 5 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
-                        <span className="audit-val audit-val-ant" title={ultimo.cambio.valorAnterior || '—'}>{ultimo.cambio.valorAnterior || '—'}</span>
-                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
-                        <span className="audit-val audit-val-nv" title={ultimo.cambio.valorNuevo || '—'}>{ultimo.cambio.valorNuevo || '—'}</span>
-                      </div>
-                      <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {ultimo.entry.nombreUsuario}
-                      </div>
-                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
-                        {fecha} · {hora}
-                      </div>
-                    </div>
-                  </div>
+                  <CampoTransicion entry={ultimo.entry} cambio={ultimo.cambio} />
                   {/* Cambios anteriores de este campo: solo al expandir. */}
-                  {abierto && resto.map(({ entry, cambio }, i) => {
-                    const t = fmtFechaHora(entry.timestamp)
-                    return (
-                      <div key={i} className="audit-field-row" style={{ opacity: 0.7 }}>
-                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255,255,255,0.25)', flexShrink: 0, marginTop: 5 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
-                            <span className="audit-val audit-val-ant" title={cambio.valorAnterior || '—'}>{cambio.valorAnterior || '—'}</span>
-                            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
-                            <span className="audit-val audit-val-nv" title={cambio.valorNuevo || '—'}>{cambio.valorNuevo || '—'}</span>
-                          </div>
-                          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {entry.nombreUsuario}
-                          </div>
-                          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
-                            {t.fecha} · {t.hora}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {abierto && resto.map(({ entry, cambio }, i) => (
+                    <CampoTransicion key={i} entry={entry} cambio={cambio} atenuado />
+                  ))}
                 </div>
               )
             })}
@@ -1706,6 +1752,9 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const firmados = firmasToMap(firmas)
   const [firmaTarget, setFirmaTarget] = useState<{ detalle: DetalleRow; firma: EstructuraFirmaItem } | null>(null)
   const [showAudit, setShowAudit] = useState(true)
+  // Campo con foco ahora mismo en el formulario (etiqueta legible, o null si no hay ninguno) —
+  // mientras se está editando un campo, el panel de auditoría muestra solo su historial.
+  const [campoActivo, setCampoActivo] = useState<string | null>(null)
   const [liberarModal, setLiberarModal] = useState(false)
   const [derogTarget, setDerogTarget] = useState<{ firmaKey: string; detalleId: number; firmaInfo: FirmaInfo; texto: string; grupo: string } | null>(null)
   const [cerrarDesvTarget, setCerrarDesvTarget] = useState<Desviacion | null>(null)
@@ -2462,13 +2511,14 @@ ${procsSections}
                       setDerogTarget({ firmaKey: fk, detalleId, firmaInfo: fi, texto: tx, grupo: gr })
                     }
                     onRequestCerrarDesviacion={setCerrarDesvTarget}
+                    onCampoActivo={setCampoActivo}
                   />
                 )
               })
             )}
           </div>
           {!readonly && showAudit && (
-            <AuditPreviewPanel brId={id ?? 0} refreshKey={auditVersion} />
+            <AuditPreviewPanel brId={id ?? 0} refreshKey={auditVersion} campoActivo={campoActivo} />
           )}
         </div>
 
