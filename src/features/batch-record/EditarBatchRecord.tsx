@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
@@ -8,7 +8,7 @@ import { materialesApi, type Material } from '@/api/materiales'
 import { desviacionesApi, type Desviacion } from '@/api/desviaciones'
 import { auditoriaApi } from '@/api/auditoria'
 import type { PreLlenadoBR, BatchRecord, RecetaMaestra } from '@/types'
-import type { AuditEntry, AuditAccion } from '@/types/audit'
+import type { AuditEntry, AuditAccion, AuditCambio } from '@/types/audit'
 import { useAudit } from '@/hooks/useAudit'
 import { usePuedeEditar } from '@/hooks/usePermisos'
 
@@ -1184,13 +1184,15 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
 
 // ── AuditPreviewPanel / AuditExpandedPanel ────────────────────────────────
 const AUDIT_CFG: Record<string, { bg: string; color: string; border: string; label: string; icon: string }> = {
-  CREAR:          { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Creación',     icon:'fa-plus' },
-  MODIFICAR:      { bg:'#DBEAFE', color:'#1D4ED8', border:'#93C5FD', label:'Modificación', icon:'fa-pencil-alt' },
-  CANCELAR:       { bg:'#FEE2E2', color:'#991B1B', border:'#FCA5A5', label:'Cancelación',  icon:'fa-ban' },
-  FIRMAR_SECCION: { bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD', label:'Firma Sección',icon:'fa-pen' },
-  FIRMAR_CIERRE:  { bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD', label:'Firma Cierre', icon:'fa-check-circle' },
-  DEROGAR_FIRMA:  { bg:'#FEF3C7', color:'#92400E', border:'#FDE68A', label:'Derogación',   icon:'fa-undo' },
-  LIBERAR_LOTE:   { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Liberación',   icon:'fa-unlock' },
+  CREAR:                { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Creación',            icon:'fa-plus' },
+  MODIFICAR:            { bg:'#DBEAFE', color:'#1D4ED8', border:'#93C5FD', label:'Modificación',        icon:'fa-pencil-alt' },
+  CANCELAR:             { bg:'#FEE2E2', color:'#991B1B', border:'#FCA5A5', label:'Cancelación',         icon:'fa-ban' },
+  FIRMAR_SECCION:       { bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD', label:'Firma Sección',       icon:'fa-pen' },
+  FIRMAR_CIERRE:        { bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD', label:'Firma Cierre',        icon:'fa-check-circle' },
+  DEROGAR_FIRMA:        { bg:'#FEF3C7', color:'#92400E', border:'#FDE68A', label:'Derogación',          icon:'fa-undo' },
+  LIBERAR_LOTE:         { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Liberación',          icon:'fa-unlock' },
+  REGISTRAR_DESVIACION: { bg:'#FEF3C7', color:'#92400E', border:'#FDE68A', label:'Desviación registrada', icon:'fa-exclamation-triangle' },
+  CERRAR_DESVIACION:    { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Desviación cerrada',  icon:'fa-check' },
 }
 
 // idEntidad no es único entre tipos de entidad — un idUsuario de Sesion, un id de Material, etc.
@@ -1210,32 +1212,115 @@ function useBrAudit(brId: string | number | undefined, refreshKey: number) {
   return entries
 }
 
+function fmtFechaHora(ts: string) {
+  const d = new Date(ts)
+  return {
+    fecha: d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    hora: d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+  }
+}
+
+// Una entrada completa (badge de acción, descripción, cambios si los tiene, motivo, quién y
+// cuándo) — se reutiliza tanto en la vista "Todo" como en la sección de eventos sin campo
+// (accesos, firmas, cierres de etapa, desviaciones) de la vista "Por Campo".
+function EntradaEvento({ entry: e }: { entry: AuditEntry }) {
+  const cfg = AUDIT_CFG[e.accion] ?? { bg:'#F1F5F9', color:'#475569', border:'#CBD5E1', label: e.accion, icon:'fa-circle' }
+  const { fecha, hora } = fmtFechaHora(e.timestamp)
+  return (
+    <div className="audit-entry" style={{ borderLeftColor: cfg.border }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
+        <span className="audit-badge" style={{ background: cfg.bg, color: cfg.color }}>
+          <i className={`fa ${cfg.icon}`} style={{ fontSize: 9 }} aria-hidden="true" />
+          {cfg.label}
+        </span>
+      </div>
+      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginBottom: 5, fontWeight: 500, lineHeight: 1.3 }}>
+        {e.descripcionEntidad}
+      </div>
+
+      {e.cambios && e.cambios.length > 0 && (
+        <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 7, padding: '6px 8px', marginBottom: 6 }}>
+          <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.35)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>
+            {e.cambios.length} campo{e.cambios.length !== 1 ? 's' : ''} modificado{e.cambios.length !== 1 ? 's' : ''}
+          </div>
+          {e.cambios.map((c, i) => (
+            <div key={i} className="audit-cambio">
+              <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.5)', flex: 1, minWidth: 0 }}>
+                <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.7)', display: 'block', marginBottom: 2 }}>{c.etiqueta}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                  <span className="audit-val audit-val-ant" title={c.valorAnterior || '—'}>{c.valorAnterior || '—'}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
+                  <span className="audit-val audit-val-nv" title={c.valorNuevo || '—'}>{c.valorNuevo || '—'}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {e.motivo && (
+        <div style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 6, padding: '4px 8px', marginBottom: 6, fontSize: 10.5, color: '#FDE68A', lineHeight: 1.4 }}>
+          <i className="fa fa-comment-alt" style={{ marginRight: 5, fontSize: 9 }} aria-hidden="true" />
+          {e.motivo}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.75)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {e.nombreUsuario}
+          </div>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'var(--f-mono)' }}>
+            {e.loginUsuario} · {e.cargo}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{hora}</div>
+          <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.25)', fontFamily: 'var(--f-mono)' }}>{fecha}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type VistaAudit = 'campos' | 'todo'
+
 function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refreshKey: number }) {
   const entries = useBrAudit(brId, refreshKey)
   const [busqueda, setBusqueda] = useState('')
-  const [campoFiltro, setCampoFiltro] = useState('')
+  const [vista, setVista] = useState<VistaAudit>('campos')
+  const [campoAbierto, setCampoAbierto] = useState<string | null>(null)
 
-  // Etiquetas únicas de todos los campos que han cambiado en este BR — alimenta el selector
-  // "ver historial de un campo". Se ordenan alfabéticamente para que sean fáciles de ubicar.
-  const camposDisponibles = Array.from(
-    new Set(entries.flatMap(e => (e.cambios ?? []).map(c => c.etiqueta)))
-  ).sort((a, b) => a.localeCompare(b, 'es'))
+  // Agrupa todos los cambios de campo (de todas las entradas, que ya vienen ordenadas del más
+  // reciente al más antiguo) por etiqueta — el campo que cambió más recientemente aparece
+  // primero, de forma automática, sin que el usuario tenga que elegirlo manualmente de una
+  // lista. Cada grupo conserva su propio orden cronológico descendente.
+  const camposAgrupados = useMemo(() => {
+    const mapa = new Map<string, { entry: AuditEntry; cambio: AuditCambio }[]>()
+    for (const e of entries) {
+      for (const c of e.cambios ?? []) {
+        if (!mapa.has(c.etiqueta)) mapa.set(c.etiqueta, [])
+        mapa.get(c.etiqueta)!.push({ entry: e, cambio: c })
+      }
+    }
+    return Array.from(mapa.entries()).map(([campo, cambios]) => ({ campo, cambios }))
+  }, [entries])
 
-  // Con un campo seleccionado: aplana todos los cambios de ESE campo (a través de todas las
-  // entradas) en una sola línea de tiempo — así se ve solo la evolución de ese valor, en vez
-  // de tener que buscarlo entrada por entrada entre cambios de otros campos.
-  const historialCampo = campoFiltro
-    ? entries.flatMap(e => (e.cambios ?? [])
-        .filter(c => c.etiqueta === campoFiltro)
-        .map(c => ({ entry: e, cambio: c })))
-    : []
+  // Eventos sin un "campo" al que agruparse: acceso al BR, firmas, cierres de etapa, desviaciones.
+  const eventosSinCambios = useMemo(() => entries.filter(e => !e.cambios || e.cambios.length === 0), [entries])
 
   const q = busqueda.trim().toLowerCase()
+  const coincide = (...partes: (string | undefined)[]) => !q || partes.some(p => p?.toLowerCase().includes(q))
+
+  const camposFiltrados = !q ? camposAgrupados : camposAgrupados.filter(g =>
+    coincide(g.campo) || g.cambios.some(({ entry, cambio }) =>
+      coincide(cambio.valorAnterior, cambio.valorNuevo, entry.nombreUsuario, entry.loginUsuario))
+  )
+  const eventosFiltrados = !q ? eventosSinCambios : eventosSinCambios.filter(e =>
+    coincide(e.descripcionEntidad, e.nombreUsuario, e.loginUsuario, e.motivo))
   const entriesFiltradas = !q ? entries : entries.filter(e =>
-    e.descripcionEntidad?.toLowerCase().includes(q) ||
-    e.nombreUsuario?.toLowerCase().includes(q) ||
-    e.loginUsuario?.toLowerCase().includes(q) ||
-    (e.cambios ?? []).some(c => c.etiqueta.toLowerCase().includes(q) || c.valorAnterior?.toLowerCase().includes(q) || c.valorNuevo?.toLowerCase().includes(q))
+    coincide(e.descripcionEntidad, e.nombreUsuario, e.loginUsuario, e.motivo) ||
+    (e.cambios ?? []).some(c => coincide(c.etiqueta, c.valorAnterior, c.valorNuevo))
   )
 
   return (
@@ -1252,16 +1337,32 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
         .audit-val-ant { background: rgba(239,68,68,0.15); color: #FCA5A5; }
         .audit-val-nv  { background: rgba(16,185,129,0.15); color: #6EE7B7; }
         .audit-filters { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 6px; }
-        .audit-filters input, .audit-filters select {
+        .audit-filters input {
           width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 7px;
           padding: 6px 9px; font-size: 11.5px; color: #fff; outline: none; font-family: inherit;
         }
         .audit-filters input::placeholder { color: rgba(255,255,255,0.35); }
-        .audit-filters select option { color: #0A1530; }
-        .audit-filters input:focus, .audit-filters select:focus { border-color: #F7C92E; }
-        .audit-field-row { display: flex; align-items: baseline; gap: 8px; padding: 8px 13px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-        .audit-field-row:last-child { border-bottom: none; }
-        @media (prefers-reduced-motion: reduce) { .audit-entry { transition: none; } }
+        .audit-filters input:focus { border-color: #F7C92E; }
+        .audit-field-row { display: flex; align-items: baseline; gap: 8px; padding: 8px 13px; }
+        .audit-tabs { display: flex; gap: 4px; padding: 9px 14px 0; }
+        .audit-tab {
+          flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+          padding: 6px 8px; border-radius: 7px 7px 0 0; border: none; cursor: pointer;
+          font-size: 11.5px; font-weight: 700; font-family: inherit;
+          background: transparent; color: rgba(255,255,255,0.4); transition: background 100ms, color 100ms;
+        }
+        .audit-tab.activo { background: rgba(255,255,255,0.06); color: #F7C92E; }
+        .audit-campo-card { border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .audit-campo-head {
+          width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 13px 0;
+          background: none; border: none; cursor: pointer; font-family: inherit; text-align: left;
+        }
+        .audit-campo-nombre { flex: 1; font-size: 11.5px; font-weight: 700; color: rgba(255,255,255,0.8); }
+        .audit-campo-count {
+          font-size: 10px; font-weight: 700; font-family: var(--f-mono); color: #F7C92E;
+          background: rgba(247,201,46,0.12); padding: 1px 6px; border-radius: 8px;
+        }
+        @media (prefers-reduced-motion: reduce) { .audit-entry, .audit-tab { transition: none; } }
       `}</style>
 
       <div style={{ padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 9, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -1275,23 +1376,27 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
       </div>
 
       {entries.length > 0 && (
-        <div className="audit-filters">
-          <input
-            type="text"
-            placeholder="Buscar por usuario, campo, valor…"
-            value={busqueda}
-            onChange={e => setBusqueda(e.target.value)}
-          />
-          {camposDisponibles.length > 0 && (
-            <select value={campoFiltro} onChange={e => setCampoFiltro(e.target.value)}>
-              <option value="">Ver todos los campos</option>
-              {camposDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          )}
-        </div>
+        <>
+          <div className="audit-tabs" role="tablist" aria-label="Vista del historial">
+            <button role="tab" aria-selected={vista === 'campos'} className={`audit-tab${vista === 'campos' ? ' activo' : ''}`} onClick={() => setVista('campos')}>
+              <i className="fa fa-stream" style={{ fontSize: 10 }} aria-hidden="true" /> Por Campo
+            </button>
+            <button role="tab" aria-selected={vista === 'todo'} className={`audit-tab${vista === 'todo' ? ' activo' : ''}`} onClick={() => setVista('todo')}>
+              <i className="fa fa-list" style={{ fontSize: 10 }} aria-hidden="true" /> Todo
+            </button>
+          </div>
+          <div className="audit-filters">
+            <input
+              type="text"
+              placeholder="Buscar por usuario, campo, valor…"
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+            />
+          </div>
+        </>
       )}
 
-      <div style={{ flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+      <div style={{ flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
         {entries.length === 0 ? (
           <div style={{ padding: '36px 16px', textAlign: 'center' }}>
             <i className="fa fa-history" style={{ fontSize: 28, color: 'rgba(255,255,255,0.1)', display: 'block', marginBottom: 12 }} aria-hidden="true" />
@@ -1300,99 +1405,82 @@ function AuditPreviewPanel({ brId, refreshKey }: { brId: string | number; refres
               Las firmas y cambios en campos<br />aparecen aquí en tiempo real.
             </div>
           </div>
-        ) : campoFiltro ? (
-          historialCampo.length === 0 ? (
-            <div style={{ padding: '30px 16px', textAlign: 'center' }}>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>Sin cambios registrados para este campo.</div>
-            </div>
-          ) : historialCampo.map(({ entry: e, cambio: c }, i) => {
-            const d = new Date(e.timestamp)
-            const fecha = d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' })
-            const hora  = d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            return (
-              <div key={`${e.id}-${i}`} className="audit-field-row">
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F7C92E', flexShrink: 0, marginTop: 5 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
-                    <span className="audit-val audit-val-ant" title={c.valorAnterior || '—'}>{c.valorAnterior || '—'}</span>
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
-                    <span className="audit-val audit-val-nv" title={c.valorNuevo || '—'}>{c.valorNuevo || '—'}</span>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {e.nombreUsuario}
-                  </div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
-                    {fecha} · {hora}
+        ) : vista === 'campos' ? (
+          <>
+            {eventosFiltrados.map(e => <EntradaEvento key={e.id} entry={e} />)}
+            {camposFiltrados.length === 0 ? (
+              eventosFiltrados.length === 0 && (
+                <div style={{ padding: '30px 16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>
+                    {q ? 'Nada coincide con la búsqueda.' : 'Aún no hay eventos registrados.'}
                   </div>
                 </div>
-              </div>
-            )
-          })
+              )
+            ) : camposFiltrados.map(g => {
+              const [ultimo, ...resto] = g.cambios
+              const abierto = campoAbierto === g.campo
+              const { fecha, hora } = fmtFechaHora(ultimo.entry.timestamp)
+              return (
+                <div key={g.campo} className="audit-campo-card">
+                  <button
+                    className="audit-campo-head"
+                    onClick={() => resto.length > 0 && setCampoAbierto(abierto ? null : g.campo)}
+                    aria-expanded={resto.length > 0 ? abierto : undefined}
+                  >
+                    <span className="audit-campo-nombre">{g.campo}</span>
+                    <span className="audit-campo-count">{g.cambios.length}</span>
+                    {resto.length > 0 && (
+                      <i className={`fa fa-chevron-${abierto ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }} aria-hidden="true" />
+                    )}
+                  </button>
+                  {/* Último cambio: siempre visible, sin necesidad de expandir nada. */}
+                  <div className="audit-field-row">
+                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F7C92E', flexShrink: 0, marginTop: 5 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
+                        <span className="audit-val audit-val-ant" title={ultimo.cambio.valorAnterior || '—'}>{ultimo.cambio.valorAnterior || '—'}</span>
+                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
+                        <span className="audit-val audit-val-nv" title={ultimo.cambio.valorNuevo || '—'}>{ultimo.cambio.valorNuevo || '—'}</span>
+                      </div>
+                      <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ultimo.entry.nombreUsuario}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
+                        {fecha} · {hora}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Cambios anteriores de este campo: solo al expandir. */}
+                  {abierto && resto.map(({ entry, cambio }, i) => {
+                    const t = fmtFechaHora(entry.timestamp)
+                    return (
+                      <div key={i} className="audit-field-row" style={{ opacity: 0.7 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255,255,255,0.25)', flexShrink: 0, marginTop: 5 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
+                            <span className="audit-val audit-val-ant" title={cambio.valorAnterior || '—'}>{cambio.valorAnterior || '—'}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
+                            <span className="audit-val audit-val-nv" title={cambio.valorNuevo || '—'}>{cambio.valorNuevo || '—'}</span>
+                          </div>
+                          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {entry.nombreUsuario}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--f-mono)' }}>
+                            {t.fecha} · {t.hora}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </>
         ) : entriesFiltradas.length === 0 ? (
           <div style={{ padding: '30px 16px', textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>Ningún evento coincide con la búsqueda.</div>
           </div>
-        ) : entriesFiltradas.map(e => {
-          const d   = new Date(e.timestamp)
-          const cfg = AUDIT_CFG[e.accion] ?? { bg:'#F1F5F9', color:'#475569', border:'#CBD5E1', label: e.accion, icon:'fa-circle' }
-          const fecha = d.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' })
-          const hora  = d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-          return (
-            <div key={e.id} className="audit-entry" style={{ borderLeftColor: cfg.border }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
-                <span className="audit-badge" style={{ background: cfg.bg, color: cfg.color }}>
-                  <i className={`fa ${cfg.icon}`} style={{ fontSize: 9 }} aria-hidden="true" />
-                  {cfg.label}
-                </span>
-              </div>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginBottom: 5, fontWeight: 500, lineHeight: 1.3 }}>
-                {e.descripcionEntidad}
-              </div>
-
-              {e.cambios && e.cambios.length > 0 && (
-                <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 7, padding: '6px 8px', marginBottom: 6 }}>
-                  <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.35)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>
-                    {e.cambios.length} campo{e.cambios.length !== 1 ? 's' : ''} modificado{e.cambios.length !== 1 ? 's' : ''}
-                  </div>
-                  {e.cambios.map((c, i) => (
-                    <div key={i} className="audit-cambio">
-                      <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.5)', flex: 1, minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.7)', display: 'block', marginBottom: 2 }}>{c.etiqueta}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                          <span className="audit-val audit-val-ant" title={c.valorAnterior || '—'}>{c.valorAnterior || '—'}</span>
-                          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>→</span>
-                          <span className="audit-val audit-val-nv" title={c.valorNuevo || '—'}>{c.valorNuevo || '—'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {e.motivo && (
-                <div style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 6, padding: '4px 8px', marginBottom: 6, fontSize: 10.5, color: '#FDE68A', lineHeight: 1.4 }}>
-                  <i className="fa fa-comment-alt" style={{ marginRight: 5, fontSize: 9 }} aria-hidden="true" />
-                  {e.motivo}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.75)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {e.nombreUsuario}
-                  </div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'var(--f-mono)' }}>
-                    {e.loginUsuario} · {e.cargo}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)', fontFamily: 'var(--f-mono)', fontWeight: 600 }}>{hora}</div>
-                  <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.25)', fontFamily: 'var(--f-mono)' }}>{fecha}</div>
-                </div>
-              </div>
-            </div>
-          )
-        })}
+        ) : entriesFiltradas.map(e => <EntradaEvento key={e.id} entry={e} />)}
       </div>
 
       <div style={{ padding: '10px 14px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
