@@ -218,17 +218,21 @@ batchRecordsRouter.post(
     await assertDetalleEnReceta(br.idRecetaMaestra, idDetalle)
     const detalle = await prisma.detalle.findUnique({
       where: { id: idDetalle },
-      include: { estrategiaFirma: { include: { firmas: { where: { activo: true } } } } },
+      include: { estrategiaFirma: { include: { firmas: { where: { activo: true, firma: { activo: true } } } } } },
     })
     if (!detalle) throw new NotFoundError('Detalle no encontrado')
 
     // Firma de cierre del detalle (bloqueKey vacío) usa la estrategia del detalle;
     // una firma de un bloque intermedio del schema usa la estrategia declarada en ese bloque.
+    // El filtro `firma: { activo: true }` es necesario aparte del `activo` del vínculo —
+    // desactivar una Firma en el catálogo no desactiva en cascada los EstrategiaFirmaItem que
+    // ya la usan, así que sin este filtro se seguirían pudiendo registrar firmas nuevas con una
+    // Firma que el catálogo ya marca como retirada.
     let firmas = detalle.estrategiaFirma?.firmas ?? []
     if (bloqueKey) {
       const idEstrategiaBloque = findFirmaSeccionEstrategia(detalle.jsonSchema, bloqueKey)
       const estrategiaBloque = idEstrategiaBloque
-        ? await prisma.estrategiaFirma.findUnique({ where: { id: idEstrategiaBloque }, include: { firmas: { where: { activo: true } } } })
+        ? await prisma.estrategiaFirma.findUnique({ where: { id: idEstrategiaBloque }, include: { firmas: { where: { activo: true, firma: { activo: true } } } } })
         : null
       firmas = estrategiaBloque?.firmas ?? []
     }
