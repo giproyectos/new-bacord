@@ -89,6 +89,21 @@ describe('POST /api/batch-records/:id/firmas', () => {
       .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
     expect(res.status).toBe(401)
   })
+
+  it('rechaza firmar con una Firma que el catálogo marca como desactivada, aunque su vínculo en la Estrategia siga activo', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.firma.update({ where: { idFirma: esc.firma.idFirma }, data: { activo: false } })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    expect(res.status).toBe(400)
+    const firmas = await prisma.batchRecordFirma.findMany({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(firmas).toHaveLength(0)
+  })
 })
 
 describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
