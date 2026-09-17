@@ -38,6 +38,38 @@ async function ultimaActividadPorBatchRecord(ids: number[]): Promise<Map<number,
   )
 }
 
+// "Actividad reciente" del Dashboard mostraba los últimos 6 Batch Records CREADOS — como el
+// 99% de los lotes se crean y arrancan a trabajarse el mismo día, en la práctica esa lista casi
+// nunca cambiaba durante el resto de su ciclo de vida, aunque hubiera firmas, cierres de etapa o
+// desviaciones ocurriendo todo el tiempo. Estos son los eventos reales del audit trail — se
+// acota por Centro (no por `dias`: es "qué está pasando ahora mismo", no un reporte histórico).
+async function actividadRecienteDeBR(idCentro: number | undefined, take = 8) {
+  const where: Record<string, unknown> = { entidad: { in: ENTIDADES_DE_BR } }
+  if (idCentro !== undefined) {
+    const brsDelCentro = await prisma.batchRecord.findMany({ where: { idCentro }, select: { idBatchRecord: true } })
+    where.idEntidad = { in: brsDelCentro.map((b) => String(b.idBatchRecord)) }
+  }
+
+  const entries = await prisma.auditEntry.findMany({ where, orderBy: { timestamp: 'desc' }, take })
+  const ids = [...new Set(entries.map((e) => Number(e.idEntidad)))]
+  const brs = await prisma.batchRecord.findMany({
+    where: { idBatchRecord: { in: ids } },
+    select: { idBatchRecord: true, ordenProceso: { select: { codigoMaterial: true } } },
+  })
+  const materialPorBr = new Map(brs.map((b) => [b.idBatchRecord, b.ordenProceso.codigoMaterial]))
+
+  return entries.map((e) => ({
+    idBatchRecord: Number(e.idEntidad),
+    accion: e.accion,
+    descripcionEntidad: e.descripcionEntidad,
+    nombreUsuario: e.nombreUsuario,
+    loginUsuario: e.loginUsuario,
+    timestamp: e.timestamp,
+    motivo: e.motivo,
+    codigoMaterial: materialPorBr.get(Number(e.idEntidad)) ?? null,
+  }))
+}
+
 batchRecordsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -61,9 +93,10 @@ batchRecordsRouter.get(
 // Batch Records (sin límite) solo para calcular conteos y un top de materiales, y ese costo
 // (tanto de red como de memoria del navegador) crecía sin techo con la producción acumulada.
 // Este endpoint calcula los agregados en el propio servidor: `porEstado` va por groupBy (una
-// consulta indexada, no una carga completa) y `recientes` solo trae los últimos 6 registros.
-// `porMaterial` sigue necesitando recorrer la tabla — Prisma no permite un groupBy a través del
-// join con OrdenProceso — pero al menos ya no viaja fila por fila hasta el navegador.
+// consulta indexada, no una carga completa) y `actividadReciente` solo trae los últimos eventos
+// del audit trail. `porMaterial` sigue necesitando recorrer la tabla — Prisma no permite un
+// groupBy a través del join con OrdenProceso — pero al menos ya no viaja fila por fila hasta el
+// navegador.
 //
 // `idCentro` acota todo el resumen a una planta — sin filtro, una operación con más de un Centro
 // mezclaría la producción de todos en un solo número global. `dias` acota por fecha de creación
@@ -73,18 +106,16 @@ batchRecordsRouter.get(
   '/resumen',
   asyncHandler(async (req, res) => {
     const { idCentro, dias } = req.query
+    const idCentroNum = typeof idCentro === 'string' && idCentro ? Number(idCentro) : undefined
     const where: Record<string, unknown> = {}
-    if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
+    if (idCentroNum !== undefined) where.idCentro = idCentroNum
     if (typeof dias === 'string' && dias) {
       where.fechaCreacion = { gte: new Date(Date.now() - Number(dias) * 86400000) }
     }
 
-    const [porEstadoRaw, recientes, todos, liberados, desviacionesAbiertas] = await Promise.all([
+    const [porEstadoRaw, actividadReciente, todos, liberados, desviacionesAbiertas] = await Promise.all([
       prisma.batchRecord.groupBy({ by: ['idEstado'], where, _count: { idEstado: true } }),
-      prisma.batchRecord.findMany({
-        where, orderBy: { fechaCreacion: 'desc' }, take: 6,
-        include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
-      }),
+      actividadRecienteDeBR(idCentroNum),
       prisma.batchRecord.findMany({
         where, select: { idOrdenProceso: true, ordenProceso: { select: { codigoMaterial: true } } },
       }),
@@ -94,7 +125,7 @@ batchRecordsRouter.get(
         select: { fechaCreacion: true, liberacion: { select: { liberadoEn: true } } },
       }),
       prisma.desviacion.count({
-        where: { estado: 'abierta', ...(where.idCentro ? { batchRecord: { idCentro: where.idCentro } } : {}) },
+        where: { estado: 'abierta', ...(idCentroNum !== undefined ? { batchRecord: { idCentro: idCentroNum } } : {}) },
       }),
     ])
 
@@ -126,10 +157,7 @@ batchRecordsRouter.get(
       tiempoCicloPromedioDias,
       lotesLiberadosEnAlcance: diasCiclo.length,
       desviacionesAbiertas,
-      recientes: recientes.map((r) => ({
-        idBatchRecord: r.idBatchRecord, idEstado: r.idEstado, fechaCreacion: r.fechaCreacion,
-        idUsuarioCreacion: r.idUsuarioCreacion, codigoMaterial: r.ordenProceso.codigoMaterial,
-      })),
+      actividadReciente,
     })
   })
 )

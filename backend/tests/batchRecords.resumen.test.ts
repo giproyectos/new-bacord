@@ -51,7 +51,7 @@ describe('GET /api/batch-records — incluye el material de la Orden de Proceso'
 })
 
 describe('GET /api/batch-records/resumen', () => {
-  it('devuelve conteos por estado, top de materiales y los últimos registros', async () => {
+  it('devuelve conteos por estado y top de materiales', async () => {
     const esc = await crearEscenarioBasico()
     const token = tokenPara(esc.usuarioAdmin)
 
@@ -61,10 +61,71 @@ describe('GET /api/batch-records/resumen', () => {
     expect(res.body.total).toBe(1)
     expect(res.body.porEstado).toEqual({ '1': 1, '2': 0, '3': 0, '4': 0 })
     expect(res.body.porMaterial).toEqual([{ codigoMaterial: esc.material.codigo, cantidad: 1 }])
-    expect(res.body.recientes).toHaveLength(1)
-    expect(res.body.recientes[0]).toMatchObject({
+    // El lote recién creado por el fixture (vía Prisma directo, no por la API) no deja ningún
+    // evento en el audit trail — a diferencia de `recientes` (antes: últimos BR por fecha de
+    // creación), `actividadReciente` solo muestra acciones reales, así que acá empieza vacío.
+    expect(res.body.actividadReciente).toEqual([])
+  })
+
+  it('actividadReciente refleja eventos reales del audit trail, no solo lotes recién creados', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .put(`/api/batch-records/${esc.batchRecord.idBatchRecord}/detalles/${esc.procesos[0].idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: JSON.stringify({ temperatura: '22' }) })
+
+    const res = await request(app).get('/api/batch-records/resumen').set('Authorization', `Bearer ${token}`)
+
+    expect(res.body.actividadReciente).toHaveLength(1)
+    expect(res.body.actividadReciente[0]).toMatchObject({
       idBatchRecord: esc.batchRecord.idBatchRecord,
-      idEstado: 1,
+      accion: 'MODIFICAR',
+      loginUsuario: esc.usuarioAdmin.login,
+      codigoMaterial: esc.material.codigo,
+    })
+  })
+
+  it('actividadReciente se acota por idCentro cuando se filtra', async () => {
+    // crearEscenarioBasico() usa códigos fijos (Centro, Material, etc.) — no se puede llamar dos
+    // veces en la misma prueba. Se arma un segundo Centro con un segundo Batch Record a mano,
+    // reutilizando la Receta/Orden de Proceso del fixture (idCentro no exige consistencia entre
+    // BatchRecord y su Receta/Orden en el modelo real).
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const centroB = await prisma.centro.create({ data: { codigo: 'C-TEST-B', descripcion: 'Centro B' } })
+    const formulaControlB = await prisma.formulaControl.create({
+      data: {
+        idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra, idOrdenProceso: esc.ordenProceso.idOrdenProceso,
+        idCentro: centroB.id, idUsuarioCreacion: esc.usuarioAdmin.idUsuario,
+      },
+    })
+    const batchRecordB = await prisma.batchRecord.create({
+      data: {
+        idFormulaControl: formulaControlB.idFormulaControl, idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra,
+        idOrdenProceso: esc.ordenProceso.idOrdenProceso, idCentro: centroB.id,
+        idUsuarioCreacion: esc.usuarioAdmin.idUsuario, idUsuarioModificacion: esc.usuarioAdmin.idUsuario,
+      },
+    })
+
+    await request(app)
+      .put(`/api/batch-records/${esc.batchRecord.idBatchRecord}/detalles/${esc.procesos[0].idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: JSON.stringify({ temperatura: '10' }) })
+    await request(app)
+      .put(`/api/batch-records/${batchRecordB.idBatchRecord}/detalles/${esc.procesos[0].idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: JSON.stringify({ temperatura: '20' }) })
+
+    const res = await request(app)
+      .get(`/api/batch-records/resumen?idCentro=${esc.centro.id}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.body.actividadReciente).toHaveLength(1)
+    expect(res.body.actividadReciente[0]).toMatchObject({
+      idBatchRecord: esc.batchRecord.idBatchRecord,
       codigoMaterial: esc.material.codigo,
     })
   })

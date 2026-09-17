@@ -8,7 +8,6 @@ import { Doughnut, Bar } from 'react-chartjs-2'
 import { useState } from 'react'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { batchRecordApi } from '@/api/batchRecord'
-import { usuariosApi } from '@/api/usuarios'
 import { desviacionesApi } from '@/api/desviaciones'
 import { centrosApi } from '@/api/centros'
 
@@ -66,6 +65,22 @@ const PERIODOS = [
   { dias: 90, label: 'Últimos 90 días' },
 ] as const
 
+// Etiqueta/color/icono por acción del audit trail — mismos códigos que registra el backend
+// (ver logAudit en batchRecords.ts/desviaciones.ts), en una versión reducida para la tarjeta de
+// "Actividad reciente" del Dashboard (el panel de auditoría embebido en el propio BR, en
+// EditarBatchRecord.tsx, tiene su propia versión con más detalle).
+const ACTIVIDAD_CFG: Record<string, { color: string; icon: string; label: string }> = {
+  CREAR:                { color: C.forest, icon: 'fa-plus',                 label: 'Creado' },
+  MODIFICAR:            { color: C.blue,   icon: 'fa-pencil-alt',           label: 'Dato modificado' },
+  CANCELAR:             { color: C.red,    icon: 'fa-ban',                  label: 'Cancelado' },
+  FIRMAR_SECCION:       { color: C.purple, icon: 'fa-pen',                  label: 'Firma de sección' },
+  FIRMAR_CIERRE:        { color: C.purple, icon: 'fa-check-circle',         label: 'Firma de cierre' },
+  DEROGAR_FIRMA:        { color: C.amber,  icon: 'fa-undo',                 label: 'Firma derogada' },
+  LIBERAR_LOTE:         { color: C.forest, icon: 'fa-unlock',               label: 'Lote liberado' },
+  REGISTRAR_DESVIACION: { color: C.amber,  icon: 'fa-triangle-exclamation', label: 'Desviación registrada' },
+  CERRAR_DESVIACION:    { color: C.forest, icon: 'fa-check',                label: 'Desviación cerrada' },
+}
+
 export function DashboardPage() {
   // Filtros: por Centro (si la operación tiene más de una planta, evita mezclar su producción en
   // un solo número global) y por período (el donut/la barra/el ciclo son acumulados de toda la
@@ -84,7 +99,6 @@ export function DashboardPage() {
   const { data: batchRecordsActivos = [] } = useQuery({ queryKey: ['batch-records', 'activos', idCentro], queryFn: () => batchRecordApi.buscar({ idEstado: 1, idCentro }) })
   const { data: batchRecordsCancelados = [] } = useQuery({ queryKey: ['batch-records', 'cancelados', idCentro], queryFn: () => batchRecordApi.buscar({ idEstado: 3, idCentro }) })
   const { data: resumen } = useQuery({ queryKey: ['batch-records', 'resumen', idCentro, dias], queryFn: () => batchRecordApi.resumen({ idCentro, dias }) })
-  const { data: usuarios = [] } = useQuery({ queryKey: ['usuarios'], queryFn: () => usuariosApi.listar() })
   const { data: desviaciones = [] } = useQuery({ queryKey: ['desviaciones'], queryFn: () => desviacionesApi.listar() })
 
   // ── Lotes activos ─────────────────────────────────────────────────────────
@@ -181,11 +195,13 @@ export function DashboardPage() {
   const barGrads   = ['#1D4ED8', '#EA580C', '#0891B2', '#059669', '#7C3AED', '#DB2777']
 
   // ── Actividad ─────────────────────────────────────────────────────────────
-  const recent = (resumen?.recientes ?? [])
-    .map(br => {
-      const user = usuarios.find(u => u.idUsuario === br.idUsuarioCreacion)
-      const cfg  = { 1: { label: 'En proceso', color: C.teal }, 2: { label: 'Finalizado', color: C.forest }, 3: { label: 'Cancelado', color: C.red }, 4: { label: 'Liberado', color: C.purple } } as Record<number, {label:string;color:string}>
-      return { br: `BR-${br.idBatchRecord}`, mat: br.codigoMaterial ?? '—', estado: cfg[br.idEstado]?.label ?? '?', color: cfg[br.idEstado]?.color ?? C.slate, user: user?.login ?? 'sistema', tiempo: relTime(br.fechaCreacion) }
+  // Eventos reales del audit trail (firmas, cierres de etapa, liberaciones, desviaciones...) —
+  // no los últimos Batch Records creados, que en la práctica casi nunca cambiaban durante el
+  // resto del ciclo de vida de un lote.
+  const recent = (resumen?.actividadReciente ?? [])
+    .map(a => {
+      const cfg = ACTIVIDAD_CFG[a.accion] ?? { color: C.slate, icon: 'fa-circle-info', label: a.accion }
+      return { br: `BR-${a.idBatchRecord}`, mat: a.codigoMaterial ?? '—', accionLabel: cfg.label, icon: cfg.icon, color: cfg.color, user: a.loginUsuario, tiempo: relTime(a.timestamp) }
     })
 
   const nivCfg  = { alta: { c: C.red, bg: '#FFF1F1', lbl: 'Alta' }, media: { c: C.amber, bg: '#FFFBEB', lbl: 'Media' }, baja: { c: C.slate, bg: '#F8FAFC', lbl: 'Baja' } }
@@ -653,20 +669,24 @@ export function DashboardPage() {
               <div className="db-card-title">Actividad reciente</div>
             </div>
             <div className="db-card-sub">Últimas acciones registradas</div>
-            <div className="act-list" role="list" aria-label="Actividad reciente">
-              {recent.map((a, i) => (
-                <div key={i} className="act-item" role="listitem">
-                  <div className="act-dot" style={{ background: a.color + '18', color: a.color }} aria-hidden="true">
-                    <i className="fa fa-clipboard-list" />
+            {recent.length === 0 ? (
+              <div className="empty"><i className="fa fa-clock-rotate-left" aria-hidden="true" /><span>Sin actividad registrada</span></div>
+            ) : (
+              <div className="act-list" role="list" aria-label="Actividad reciente">
+                {recent.map((a, i) => (
+                  <div key={i} className="act-item" role="listitem">
+                    <div className="act-dot" style={{ background: a.color + '18', color: a.color }} aria-hidden="true">
+                      <i className={`fa ${a.icon}`} />
+                    </div>
+                    <div className="act-body">
+                      <div className="act-main">{a.br} · {a.mat}</div>
+                      <div className="act-sub">{a.accionLabel} · {a.user}</div>
+                    </div>
+                    <div className="act-time" aria-label={`Hace ${a.tiempo}`}>{a.tiempo}</div>
                   </div>
-                  <div className="act-body">
-                    <div className="act-main">{a.br} · {a.mat}</div>
-                    <div className="act-sub">{a.estado} · {a.user}</div>
-                  </div>
-                  <div className="act-time" aria-label={`Hace ${a.tiempo}`}>{a.tiempo}</div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

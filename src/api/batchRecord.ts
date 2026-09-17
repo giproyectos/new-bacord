@@ -70,9 +70,12 @@ export interface BatchRecordResumen {
   tiempoCicloPromedioDias: number | null
   lotesLiberadosEnAlcance: number
   desviacionesAbiertas: number
-  recientes: {
-    idBatchRecord: number; idEstado: number; fechaCreacion: string
-    idUsuarioCreacion: number; codigoMaterial: string
+  // Eventos reales del audit trail (firmas, cierres de etapa, liberaciones, desviaciones...),
+  // no una lista de los últimos Batch Records creados — ver actividadRecienteDeBR en el backend.
+  actividadReciente: {
+    idBatchRecord: number; accion: string; descripcionEntidad: string
+    nombreUsuario: string; loginUsuario: string; timestamp: string
+    motivo: string | null; codigoMaterial: string | null
   }[]
 }
 
