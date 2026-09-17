@@ -159,6 +159,22 @@ describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
     expect(cierres).toHaveLength(0)
   })
 
+  it('deja de exigir una Firma desactivada — de lo contrario la etapa quedaría trabada para siempre', async () => {
+    const esc = await crearEscenarioBasico(2)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    // Se desactiva la única Firma requerida en esta etapa sin firmarla nunca — como ya no se
+    // puede firmar con una Firma inactiva (POST /firmas la rechaza), si "cerrar etapa" la siguiera
+    // contando como requerida, esta etapa (y el Batch Record) no podrían cerrarse jamás.
+    await prisma.firma.update({ where: { idFirma: esc.firma.idFirma }, data: { activo: false } })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(200)
+  })
+
   it('no permite cerrar la segunda etapa si la primera sigue abierta', async () => {
     const esc = await crearEscenarioBasico(2)
     const token = tokenPara(esc.usuarioAdmin)
