@@ -15,7 +15,7 @@ export const auditoriaApi = {
   registrar: async (params: RegistrarAuditParams): Promise<void> => {
     await http.post('/auditoria', params)
   },
-  consultar: async (filtro?: { entidad?: AuditEntidad; idEntidad?: string | number }): Promise<AuditEntry[]> => {
+  consultar: async (filtro?: { entidad?: AuditEntidad; idEntidad?: string | number; limite?: number }): Promise<AuditEntry[]> => {
     const { data } = await http.get<AuditEntry[]>('/auditoria', { params: filtro })
     return data
   },

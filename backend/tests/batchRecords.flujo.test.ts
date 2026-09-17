@@ -122,6 +122,28 @@ describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.estado).toBe(true)
+    const evento = await prisma.auditEntry.findFirstOrThrow({
+      where: { entidad: 'BatchRecord', idEntidad: String(esc.batchRecord.idBatchRecord), motivo: 'Etapa cerrada' },
+    })
+    expect(evento.accion).toBe('MODIFICAR')
+  })
+
+  it('no duplica el evento de auditoría si se vuelve a llamar sobre una etapa ya cerrada', async () => {
+    const esc = await crearEscenarioBasico(2)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle: esc.procesos[0].idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+    const cerrarUrl = `/api/batch-records/${esc.batchRecord.idBatchRecord}/procesos/${esc.procesos[0].idProceso}/cerrar`
+    await request(app).post(cerrarUrl).set('Authorization', `Bearer ${token}`)
+    await request(app).post(cerrarUrl).set('Authorization', `Bearer ${token}`)
+
+    const eventos = await prisma.auditEntry.findMany({
+      where: { entidad: 'BatchRecord', idEntidad: String(esc.batchRecord.idBatchRecord), motivo: 'Etapa cerrada' },
+    })
+    expect(eventos).toHaveLength(1)
   })
 
   it('rechaza cerrar una etapa con firmas de cierre pendientes', async () => {

@@ -47,8 +47,11 @@ desviacionesRouter.post(
         data: { ...parsed.data, idUsuarioReporta: req.auth!.idUsuario },
         include,
       })
+      // idEntidad es el idBatchRecord (no el id propio de la Desviacion) para que este evento
+      // aparezca en el panel de auditoría embebido en el Batch Record — igual que BatchRecord,
+      // DetalleValores, FirmaSeccion y FirmaCierre, que ya se identifican por su idBatchRecord.
       await logAudit(tx, {
-        entidad: 'Desviacion', idEntidad: creada.id,
+        entidad: 'Desviacion', idEntidad: parsed.data.idBatchRecord,
         descripcionEntidad: `BR-${parsed.data.idBatchRecord} · ${detalle.descripcion} · ${parsed.data.labelCampo}`,
         accion: 'REGISTRAR_DESVIACION', modulo: 'batch-record', motivo: parsed.data.descripcion,
         actor: await actorDe(tx, req.auth!.idUsuario),
@@ -102,7 +105,7 @@ desviacionesRouter.post(
         include,
       })
       await logAudit(tx, {
-        entidad: 'Desviacion', idEntidad: id,
+        entidad: 'Desviacion', idEntidad: existente.idBatchRecord,
         descripcionEntidad: `BR-${existente.idBatchRecord} · ${existente.detalle.descripcion} · ${existente.labelCampo}`,
         accion: 'CERRAR_DESVIACION', modulo: 'batch-record', motivo: observacionCierre,
         actor: await actorDe(tx, solicitante.idUsuario),

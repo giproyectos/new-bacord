@@ -1081,6 +1081,18 @@
 
             var rangeErrors = {};
 
+            // El panel de auditoría del padre resalta el campo que se está editando en este
+            // momento — Formio re-emite los eventos focus/blur de cada componente a través del
+            // form completo, así que basta escucharlos aquí una vez en vez de por componente.
+            form.on('focus', function(component) {
+              if (component && typeof component.key === 'string') {
+                window.top.postMessage({ type: 'FIELD_FOCUS', key: component.key }, PARENT_ORIGIN);
+              }
+            });
+            form.on('blur', function() {
+              window.top.postMessage({ type: 'FIELD_BLUR' }, PARENT_ORIGIN);
+            });
+
             form.on('change', function(changeEvt) {
               clearNewRowTimeFields(form, _dgRowCounts);
               var jsonData = JSON.stringify(form.submission, null, 4);

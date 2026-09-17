@@ -91,7 +91,40 @@ batchRecordsRouter.get(
   })
 )
 
-const detalleDataSchema = z.object({ jsonData: z.string() })
+const detalleDataSchema = z.object({ jsonData: z.string(), labels: z.record(z.string()).optional() })
+
+// Diff plano entre dos snapshots del jsonData de un Detalle (formato Form.io) → cambios
+// auditables. Calculado siempre en el servidor, a partir de lo que había guardado antes de
+// esta misma solicitud y lo que de verdad se está persistiendo — antes este diff lo calculaba
+// el navegador y lo mandaba por separado a POST /auditoria, así que el guardado real y su
+// rastro de auditoría dependían de dos solicitudes independientes: si la segunda fallaba (red,
+// timeout) o simplemente no se enviaba, el dato quedaba guardado sin ningún rastro de qué cambió.
+function parseJsonDataSeguro(jsonData: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(jsonData)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function diffDetalleData(
+  anterior: Record<string, unknown>,
+  nuevo: Record<string, unknown>,
+  labels: Record<string, string> | undefined
+): AuditCambio[] {
+  const cambios: AuditCambio[] = []
+  const claves = new Set([...Object.keys(anterior), ...Object.keys(nuevo)])
+  for (const campo of claves) {
+    if (campo === 'submit' || campo.startsWith('btn')) continue // botones no son datos auditables
+    const av = anterior[campo]
+    const nv = nuevo[campo]
+    const avStr = av && typeof av === 'object' ? JSON.stringify(av) : String(av ?? '')
+    const nvStr = nv && typeof nv === 'object' ? JSON.stringify(nv) : String(nv ?? '')
+    if (avStr !== nvStr) cambios.push({ campo, etiqueta: labels?.[campo] ?? campo, valorAnterior: avStr, valorNuevo: nvStr })
+  }
+  return cambios
+}
 
 batchRecordsRouter.put(
   '/:id/detalles/:idDetalle',
@@ -107,10 +140,29 @@ batchRecordsRouter.put(
     assertEnProceso(br)
     await assertDetalleEnReceta(br.idRecetaMaestra, idDetalle)
 
-    const datos = await prisma.batchRecordDetalleData.upsert({
+    const detalle = await prisma.detalle.findUnique({ where: { id: idDetalle }, select: { descripcion: true } })
+    const anterior = await prisma.batchRecordDetalleData.findUnique({
       where: { idBatchRecord_idDetalle: { idBatchRecord, idDetalle } },
-      update: { jsonData: parsed.data.jsonData },
-      create: { idBatchRecord, idDetalle, jsonData: parsed.data.jsonData },
+    })
+    const anteriorData = anterior ? parseJsonDataSeguro(anterior.jsonData) : {}
+    const nuevaData = parseJsonDataSeguro(parsed.data.jsonData)
+    const cambios = diffDetalleData(anteriorData, nuevaData, parsed.data.labels)
+
+    const datos = await prisma.$transaction(async (tx) => {
+      const guardado = await tx.batchRecordDetalleData.upsert({
+        where: { idBatchRecord_idDetalle: { idBatchRecord, idDetalle } },
+        update: { jsonData: parsed.data.jsonData },
+        create: { idBatchRecord, idDetalle, jsonData: parsed.data.jsonData },
+      })
+      if (cambios.length > 0) {
+        await logAudit(tx, {
+          entidad: 'DetalleValores', idEntidad: idBatchRecord,
+          descripcionEntidad: detalle?.descripcion ?? `Detalle ${idDetalle}`,
+          accion: 'MODIFICAR', modulo: 'batch-record', cambios,
+          actor: await actorDe(tx, req.auth!.idUsuario),
+        })
+      }
+      return guardado
     })
     res.json({ estado: true, mensaje: 'Guardado', datos })
   })
@@ -170,10 +222,25 @@ batchRecordsRouter.post(
       }
     }
 
-    const cierre = await prisma.batchRecordProcesoCierre.upsert({
+    const yaCerrada = await prisma.batchRecordProcesoCierre.findUnique({
       where: { idBatchRecord_idProceso: { idBatchRecord, idProceso } },
-      update: {},
-      create: { idBatchRecord, idProceso, idUsuario: req.auth!.idUsuario },
+    })
+
+    const cierre = await prisma.$transaction(async (tx) => {
+      const guardado = await tx.batchRecordProcesoCierre.upsert({
+        where: { idBatchRecord_idProceso: { idBatchRecord, idProceso } },
+        update: {},
+        create: { idBatchRecord, idProceso, idUsuario: req.auth!.idUsuario },
+      })
+      if (!yaCerrada) {
+        await logAudit(tx, {
+          entidad: 'BatchRecord', idEntidad: idBatchRecord,
+          descripcionEntidad: `BR-${idBatchRecord} · Etapa ${estructura[idx].proceso.codigo} — ${estructura[idx].proceso.descripcion}`,
+          accion: 'MODIFICAR', modulo: 'batch-record', motivo: 'Etapa cerrada',
+          actor: await actorDe(tx, req.auth!.idUsuario),
+        })
+      }
+      return guardado
     })
     res.json({ estado: true, mensaje: 'Etapa cerrada', datos: cierre })
   })
