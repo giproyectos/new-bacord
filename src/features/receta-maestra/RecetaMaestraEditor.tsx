@@ -6,15 +6,16 @@ import { procesosApi, type ProcesoItem } from '@/api/procesos'
 import { detallesApi, type DetalleApi } from '@/api/detalles'
 import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
 import { usePuedeEditar } from '@/hooks/usePermisos'
+import { RECETA_ESTADO_LABEL } from '@/constants/recetaMaestra'
 import type { RecetaMaestra, EstrategiaFirma } from '@/types'
 
-const estadoLabel: Record<number, { text: string; bg: string; color: string }> = {
-  1: { text: 'Activo',    bg: '#D1FAE5', color: '#065F46' },
-  2: { text: 'Inactivo',  bg: '#F1F5F9', color: '#475569' },
-  3: { text: 'Aprobado',  bg: '#DBEAFE', color: '#1D4ED8' },
-  4: { text: 'Creación',  bg: '#FEF3C7', color: '#92400E' },
-  5: { text: 'Revisión',  bg: '#EDE9FE', color: '#5B21B6' },
-  6: { text: 'Rechazado', bg: '#FEE2E2', color: '#991B1B' },
+const estadoColores: Record<number, { bg: string; color: string }> = {
+  1: { bg: '#D1FAE5', color: '#065F46' },
+  2: { bg: '#F1F5F9', color: '#475569' },
+  3: { bg: '#DBEAFE', color: '#1D4ED8' },
+  4: { bg: '#FEF3C7', color: '#92400E' },
+  5: { bg: '#EDE9FE', color: '#5B21B6' },
+  6: { bg: '#FEE2E2', color: '#991B1B' },
 }
 
 // Estructura local — misma forma que espera el backend en /estructura, más un `id` local para React keys.
@@ -169,7 +170,10 @@ export function RecetaMaestraEditor() {
   )
 
   const sortedProcesos = [...procesos].sort((a, b) => a.orden - b.orden)
-  const estado = estadoLabel[receta.idEstado] ?? estadoLabel[1]
+  const estado = {
+    text: RECETA_ESTADO_LABEL[receta.idEstado] ?? RECETA_ESTADO_LABEL[1],
+    ...(estadoColores[receta.idEstado] ?? estadoColores[1]),
+  }
 
   return (
     <>
