@@ -3,6 +3,11 @@ import { prisma } from '../db/prisma.js'
 
 type Tx = Prisma.TransactionClient | typeof prisma
 
+// El filtro `firma: { activo: true }` (además del `activo` del propio vínculo EstrategiaFirmaItem)
+// es necesario en ambas funciones de este archivo — sin él, desactivar una Firma ya usada en la
+// estrategia de un Batch Record en curso lo deja trabado para siempre: sigue contando como
+// requerida aquí (nunca llega a 100%, nunca cierra su etapa) pero ya no se puede firmar con ella
+// (POST /:id/firmas sí filtra por Firma.activo). Debe coincidir con ese mismo filtro.
 /** Recalcula porcentajeAvance de un BR: firmas registradas / firmas requeridas por la estructura de su receta. */
 export async function recomputePorcentajeAvance(tx: Tx, idBatchRecord: number): Promise<number> {
   const br = await tx.batchRecord.findUniqueOrThrow({ where: { idBatchRecord } })
@@ -11,7 +16,7 @@ export async function recomputePorcentajeAvance(tx: Tx, idBatchRecord: number): 
     where: { idRecetaMaestra: br.idRecetaMaestra },
     include: {
       detalles: {
-        include: { detalle: { include: { estrategiaFirma: { include: { firmas: { where: { activo: true } } } } } } },
+        include: { detalle: { include: { estrategiaFirma: { include: { firmas: { where: { activo: true, firma: { activo: true } } } } } } } },
       },
     },
   })
@@ -57,7 +62,7 @@ export async function getEstructuraProcesos(tx: Tx, idRecetaMaestra: number) {
           detalle: {
             include: {
               estrategiaFirma: {
-                include: { firmas: { where: { activo: true }, orderBy: { orden: 'asc' }, include: { firma: { include: { grupo: true } } } } },
+                include: { firmas: { where: { activo: true, firma: { activo: true } }, orderBy: { orden: 'asc' }, include: { firma: { include: { grupo: true } } } } },
               },
             },
           },

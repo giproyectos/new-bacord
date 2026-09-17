@@ -63,9 +63,34 @@ export interface EstructuraProceso {
   detalles: { id: number; idDetalle: number; orden: number; detalle: EstructuraDetalle }[]
 }
 
+export interface BatchRecordResumen {
+  total: number
+  porEstado: Record<1 | 2 | 3 | 4, number>
+  porMaterial: { codigoMaterial: string; cantidad: number }[]
+  tiempoCicloPromedioDias: number | null
+  lotesLiberadosEnAlcance: number
+  desviacionesAbiertas: number
+  // Eventos reales del audit trail (firmas, cierres de etapa, liberaciones, desviaciones...),
+  // no una lista de los últimos Batch Records creados — ver actividadRecienteDeBR en el backend.
+  actividadReciente: {
+    idBatchRecord: number; accion: string; descripcionEntidad: string
+    nombreUsuario: string; loginUsuario: string; timestamp: string
+    motivo: string | null; codigoMaterial: string | null
+  }[]
+}
+
+export interface FiltroResumenBR { idCentro?: number; dias?: number }
+
 export const batchRecordApi = {
   buscar: async (f?: BusquedaBatchRecord): Promise<BatchRecord[]> =>
     (await http.get<BatchRecord[]>('/batch-records', { params: f })).data,
+
+  // Agregados (conteos por estado/material, tiempo de ciclo, últimos 6) calculados en el
+  // servidor — para el Dashboard, que no necesita el historial completo de Batch Records para
+  // mostrar un resumen. `idCentro` acota a una planta, `dias` a una ventana de tiempo reciente
+  // (omitido = todo el histórico).
+  resumen: async (f?: FiltroResumenBR): Promise<BatchRecordResumen> =>
+    (await http.get<BatchRecordResumen>('/batch-records/resumen', { params: f })).data,
 
   find: async (id: number): Promise<BatchRecord> => (await http.get<BatchRecord>(`/batch-records/${id}`)).data,
 

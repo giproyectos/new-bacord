@@ -5,11 +5,11 @@ import {
   Filler, Title,
 } from 'chart.js'
 import { Doughnut, Bar } from 'react-chartjs-2'
+import { useState } from 'react'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { batchRecordApi } from '@/api/batchRecord'
-import { ordenProcesoApi } from '@/api/ordenProceso'
-import { usuariosApi } from '@/api/usuarios'
 import { desviacionesApi } from '@/api/desviaciones'
+import { centrosApi } from '@/api/centros'
 
 ChartJS.register(
   ArcElement, Tooltip, Legend,
@@ -53,28 +53,67 @@ function progressGrad(avance: number) {
   return { grad: 'linear-gradient(90deg,#DC2626,#F87171)', border: '#DC2626' }
 }
 
+// Ventana fija para no mostrar como "alerta activa" un lote cancelado hace meses — a diferencia
+// del período del resumen (que el usuario elige para el donut/la barra), esto no es un dato que
+// se esté "consultando", es ruido viejo que ya nadie necesita atender.
+const DIAS_ALERTA_CANCELADO = 30
+
+const PERIODOS = [
+  { dias: undefined, label: 'Todo el histórico' },
+  { dias: 7,  label: 'Últimos 7 días' },
+  { dias: 30, label: 'Últimos 30 días' },
+  { dias: 90, label: 'Últimos 90 días' },
+] as const
+
+// Etiqueta/color/icono por acción del audit trail — mismos códigos que registra el backend
+// (ver logAudit en batchRecords.ts/desviaciones.ts), en una versión reducida para la tarjeta de
+// "Actividad reciente" del Dashboard (el panel de auditoría embebido en el propio BR, en
+// EditarBatchRecord.tsx, tiene su propia versión con más detalle).
+const ACTIVIDAD_CFG: Record<string, { color: string; icon: string; label: string }> = {
+  CREAR:                { color: C.forest, icon: 'fa-plus',                 label: 'Creado' },
+  MODIFICAR:            { color: C.blue,   icon: 'fa-pencil-alt',           label: 'Dato modificado' },
+  CANCELAR:             { color: C.red,    icon: 'fa-ban',                  label: 'Cancelado' },
+  FIRMAR_SECCION:       { color: C.purple, icon: 'fa-pen',                  label: 'Firma de sección' },
+  FIRMAR_CIERRE:        { color: C.purple, icon: 'fa-check-circle',         label: 'Firma de cierre' },
+  DEROGAR_FIRMA:        { color: C.amber,  icon: 'fa-undo',                 label: 'Firma derogada' },
+  LIBERAR_LOTE:         { color: C.forest, icon: 'fa-unlock',               label: 'Lote liberado' },
+  REGISTRAR_DESVIACION: { color: C.amber,  icon: 'fa-triangle-exclamation', label: 'Desviación registrada' },
+  CERRAR_DESVIACION:    { color: C.forest, icon: 'fa-check',                label: 'Desviación cerrada' },
+}
+
 export function DashboardPage() {
-  const { data: batchRecords = [] } = useQuery({ queryKey: ['batch-records'], queryFn: () => batchRecordApi.buscar() })
-  const { data: ordenes = [] } = useQuery({ queryKey: ['ordenes-proceso'], queryFn: () => ordenProcesoApi.buscar() })
-  const { data: usuarios = [] } = useQuery({ queryKey: ['usuarios'], queryFn: () => usuariosApi.listar() })
+  // Filtros: por Centro (si la operación tiene más de una planta, evita mezclar su producción en
+  // un solo número global) y por período (el donut/la barra/el ciclo son acumulados de toda la
+  // vida de la planta si no se acota — "todo el histórico" no dice nada sobre qué está pasando
+  // ahora). Los lotes activos/pendientes/alertas son "en este momento", así que solo respetan el
+  // Centro, no el período.
+  const [idCentro, setIdCentro] = useState<number | undefined>(undefined)
+  const [dias, setDias] = useState<number | undefined>(undefined)
+  const { data: centros = [] } = useQuery({ queryKey: ['centros'], queryFn: () => centrosApi.listar() })
+
+  // El Dashboard es la página de inicio — a diferencia de una pantalla de consulta puntual, no
+  // puede cargar el historial completo de Batch Records en cada visita (crecería sin techo con
+  // la producción acumulada). Se piden solo los estados que de verdad se necesitan en detalle
+  // (activos y cancelados, para las tarjetas y alertas de abajo) y un resumen agregado calculado
+  // en el servidor (conteos, ciclo y últimos 6) para el donut, la barra y la actividad reciente.
+  const { data: batchRecordsActivos = [] } = useQuery({ queryKey: ['batch-records', 'activos', idCentro], queryFn: () => batchRecordApi.buscar({ idEstado: 1, idCentro }) })
+  const { data: batchRecordsCancelados = [] } = useQuery({ queryKey: ['batch-records', 'cancelados', idCentro], queryFn: () => batchRecordApi.buscar({ idEstado: 3, idCentro }) })
+  const { data: resumen } = useQuery({ queryKey: ['batch-records', 'resumen', idCentro, dias], queryFn: () => batchRecordApi.resumen({ idCentro, dias }) })
   const { data: desviaciones = [] } = useQuery({ queryKey: ['desviaciones'], queryFn: () => desviacionesApi.listar() })
 
   // ── Lotes activos ─────────────────────────────────────────────────────────
-  const brsActivosBase = batchRecords
-    .filter(br => br.idEstado === 1)
-    .map(br => {
-      const op  = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-      const dias = Math.floor((Date.now() - new Date(br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
-      return {
-        id: br.idBatchRecord,
-        codigo: `BR-${br.idBatchRecord}`,
-        material: op?.codigoMaterial ?? '—',
-        producto: op?.descripcionMaterial?.split(' ').slice(0, 5).join(' ') ?? '—',
-        avance: br.porcentajeAvance ?? 0,
-        dias,
-        fechaCreacion: br.fechaCreacion,
-      }
-    })
+  const brsActivosBase = batchRecordsActivos.map(br => {
+    const dias = Math.floor((Date.now() - new Date(br.ultimaActividad ?? br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
+    return {
+      id: br.idBatchRecord,
+      codigo: `BR-${br.idBatchRecord}`,
+      material: br.ordenProceso?.codigoMaterial ?? '—',
+      producto: br.ordenProceso?.descripcionMaterial?.split(' ').slice(0, 5).join(' ') ?? '—',
+      avance: br.porcentajeAvance ?? 0,
+      dias,
+      fechaCreacion: br.fechaCreacion,
+    }
+  })
 
   const estructuraQueries = useQueries({
     queries: brsActivosBase.map(br => ({ queryKey: ['br-estructura', br.id], queryFn: () => batchRecordApi.getEstructura(br.id) })),
@@ -128,44 +167,48 @@ export function DashboardPage() {
     if (br.avance === 0 && br.dias >= 5)
       alertas.push({ nivel: 'baja',  icon: 'fa-hourglass-start', titulo: `${br.codigo} · Proceso no iniciado`, detalle: `${br.producto} · creado hace ${br.dias} días` })
   })
-  batchRecords.filter(br => br.idEstado === 3).forEach(br => {
-    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-    alertas.push({ nivel: 'media', icon: 'fa-ban', titulo: `BR-${br.idBatchRecord} · Lote cancelado`, detalle: `${op?.codigoMaterial ?? '—'} · ${br.motivoEstado?.slice(0, 60) || 'sin motivo'}` })
-  })
-  desviaciones.filter(d => d.estado === 'abierta').forEach(d => {
+  // Solo cancelaciones recientes — un lote cancelado hace meses ya no necesita que nadie lo
+  // atienda hoy, y dejarlo para siempre en "alertas activas" solo ensucia la lista con ruido viejo.
+  batchRecordsCancelados
+    .filter(br => Math.floor((Date.now() - new Date(br.fechaModificacion).getTime()) / 86400000) <= DIAS_ALERTA_CANCELADO)
+    .forEach(br => {
+      alertas.push({ nivel: 'media', icon: 'fa-ban', titulo: `BR-${br.idBatchRecord} · Lote cancelado`, detalle: `${br.ordenProceso?.codigoMaterial ?? '—'} · ${br.motivoEstado?.slice(0, 60) || 'sin motivo'}` })
+    })
+  // desviaciones no trae idCentro directo — se acota contra los lotes activos ya filtrados por
+  // Centro (una desviación abierta siempre está ligada a un lote todavía en proceso).
+  const idsBrActivos = new Set(brsActivos.map(br => br.id))
+  desviaciones.filter(d => d.estado === 'abierta' && (idCentro === undefined || idsBrActivos.has(d.idBatchRecord))).forEach(d => {
     alertas.push({ nivel: 'alta', icon: 'fa-triangle-exclamation', titulo: `BR-${d.idBatchRecord} · Desviación abierta — ${d.campo}`, detalle: `${d.labelCampo} — valor registrado: ${d.valorIngresado}` })
   })
 
   // ── Donut ─────────────────────────────────────────────────────────────────
   const cnt = {
-    trat: batchRecords.filter(b => b.idEstado === 1).length,
-    fin:  batchRecords.filter(b => b.idEstado === 2).length,
-    can:  batchRecords.filter(b => b.idEstado === 3).length,
-    lib:  batchRecords.filter(b => b.idEstado === 4).length,
-    tot:  batchRecords.length,
+    trat: resumen?.porEstado[1] ?? 0,
+    fin:  resumen?.porEstado[2] ?? 0,
+    can:  resumen?.porEstado[3] ?? 0,
+    lib:  resumen?.porEstado[4] ?? 0,
+    tot:  resumen?.total ?? 0,
   }
 
   // ── Bar ───────────────────────────────────────────────────────────────────
-  const matMap: Record<string, number> = {}
-  batchRecords.forEach(br => {
-    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-    if (op) matMap[op.codigoMaterial] = (matMap[op.codigoMaterial] ?? 0) + 1
-  })
-  const matEntries = Object.entries(matMap).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const matEntries: [string, number][] = (resumen?.porMaterial ?? []).map(m => [m.codigoMaterial, m.cantidad])
   const barGrads   = ['#1D4ED8', '#EA580C', '#0891B2', '#059669', '#7C3AED', '#DB2777']
 
   // ── Actividad ─────────────────────────────────────────────────────────────
-  const recent = [...batchRecords]
-    .sort((a, b) => new Date(b.fechaCreacion).getTime() - new Date(a.fechaCreacion).getTime())
-    .slice(0, 6)
-    .map(br => {
-      const op   = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-      const user = usuarios.find(u => u.idUsuario === br.idUsuarioCreacion)
-      const cfg  = { 1: { label: 'En proceso', color: C.teal }, 2: { label: 'Finalizado', color: C.forest }, 3: { label: 'Cancelado', color: C.red }, 4: { label: 'Liberado', color: C.purple } } as Record<number, {label:string;color:string}>
-      return { br: `BR-${br.idBatchRecord}`, mat: op?.codigoMaterial ?? '—', estado: cfg[br.idEstado]?.label ?? '?', color: cfg[br.idEstado]?.color ?? C.slate, user: user?.login ?? 'sistema', tiempo: relTime(br.fechaCreacion) }
+  // Eventos reales del audit trail (firmas, cierres de etapa, liberaciones, desviaciones...) —
+  // no los últimos Batch Records creados, que en la práctica casi nunca cambiaban durante el
+  // resto del ciclo de vida de un lote.
+  const recent = (resumen?.actividadReciente ?? [])
+    .map(a => {
+      const cfg = ACTIVIDAD_CFG[a.accion] ?? { color: C.slate, icon: 'fa-circle-info', label: a.accion }
+      return { br: `BR-${a.idBatchRecord}`, mat: a.codigoMaterial ?? '—', accionLabel: cfg.label, icon: cfg.icon, color: cfg.color, user: a.loginUsuario, tiempo: relTime(a.timestamp) }
     })
 
   const nivCfg  = { alta: { c: C.red, bg: '#FFF1F1', lbl: 'Alta' }, media: { c: C.amber, bg: '#FFFBEB', lbl: 'Media' }, baja: { c: C.slate, bg: '#F8FAFC', lbl: 'Baja' } }
+
+  const desviacionesAbiertasTotal = resumen?.desviacionesAbiertas ?? 0
+  const tiempoCiclo = resumen?.tiempoCicloPromedioDias ?? null
+  const periodoLabel = PERIODOS.find(p => p.dias === dias)?.label ?? 'Todo el histórico'
 
   const today = new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
   const todayCap = today.charAt(0).toUpperCase() + today.slice(1)
@@ -192,7 +235,13 @@ export function DashboardPage() {
           font-size: 21px; font-weight: 800; color: #0A2D63; letter-spacing: -.4px;
         }
         .db-header-date  { font-size: 12px; color: #64748B; font-family: var(--f-mono); margin-top: 2px; }
-        .db-header-right { display: flex; align-items: center; gap: 10px; }
+        .db-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .db-filter {
+          height: 32px; padding: 0 10px; border: 1.5px solid #E2E8F0; border-radius: 9px;
+          font-size: 12px; font-family: var(--f-sans); color: #334155; background: #F8FAFD;
+          cursor: pointer; outline: none;
+        }
+        .db-filter:focus-visible { border-color: #1D4ED8; }
         .db-status-dot {
           width: 9px; height: 9px; border-radius: 50%;
           background: #22C55E; box-shadow: 0 0 0 3px #DCFCE7;
@@ -200,7 +249,7 @@ export function DashboardPage() {
         .db-status-lbl { font-size: 12px; color: #475569; font-family: var(--f-mono); }
 
         /* ── KPI row ── */
-        .db-kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; }
+        .db-kpis { display: grid; grid-template-columns: repeat(5,1fr); gap: 14px; }
         .db-kpi  {
           background: #fff; border: 1px solid #E8EDF5; border-radius: 16px;
           padding: 0; overflow: hidden;
@@ -303,6 +352,9 @@ export function DashboardPage() {
         .empty span { font-size: 13px; }
 
         /* ── responsive ── */
+        @media (max-width: 1200px) {
+          .db-kpis { grid-template-columns: repeat(3,1fr); }
+        }
         @media (max-width: 900px) {
           .db-grid32, .db-grid23 { grid-template-columns: 1fr; }
           .db-kpis { grid-template-columns: repeat(2,1fr); }
@@ -323,6 +375,25 @@ export function DashboardPage() {
             <div className="db-header-date">{todayCap}</div>
           </div>
           <div className="db-header-right">
+            {centros.length > 1 && (
+              <select
+                className="db-filter"
+                value={idCentro ?? ''}
+                onChange={e => setIdCentro(e.target.value ? Number(e.target.value) : undefined)}
+                aria-label="Filtrar por Centro"
+              >
+                <option value="">Todos los centros</option>
+                {centros.map(c => <option key={c.id} value={c.id}>{c.descripcion}</option>)}
+              </select>
+            )}
+            <select
+              className="db-filter"
+              value={dias ?? ''}
+              onChange={e => setDias(e.target.value ? Number(e.target.value) : undefined)}
+              aria-label="Período del donut, la barra por material y el tiempo de ciclo"
+            >
+              {PERIODOS.map(p => <option key={p.label} value={p.dias ?? ''}>{p.label}</option>)}
+            </select>
             <div className="db-status-dot" aria-hidden="true" />
             <span className="db-status-lbl">Sistema operativo</span>
           </div>
@@ -356,11 +427,21 @@ export function DashboardPage() {
               iconC:  alertas.some(a => a.nivel === 'alta') ? C.red : C.amber,
             },
             {
-              label: 'Avance promedio',     val: `${avanceProm}%`,
-              badge: `${brsActivos.length} lote${brsActivos.length !== 1 ? 's' : ''} activo${brsActivos.length !== 1 ? 's' : ''}`,
-              badgeColor: C.forest,
-              accentFrom: '#059669', accentTo: '#34D399',
-              icon: 'fa-chart-line', iconBg: '#ECFDF5', iconC: '#059669',
+              label: 'Desviaciones abiertas', val: desviacionesAbiertasTotal,
+              badge: desviacionesAbiertasTotal > 0 ? 'requieren disposición' : 'sin pendientes',
+              badgeColor: desviacionesAbiertasTotal > 0 ? C.red : C.slate,
+              accentFrom: desviacionesAbiertasTotal > 0 ? '#DC2626' : '#94A3B8',
+              accentTo:   desviacionesAbiertasTotal > 0 ? '#F87171' : '#CBD5E1',
+              icon: 'fa-flask',
+              iconBg: desviacionesAbiertasTotal > 0 ? '#FEE2E2' : '#F1F5F9',
+              iconC:  desviacionesAbiertasTotal > 0 ? C.red : C.slate,
+            },
+            {
+              label: 'Tiempo de ciclo prom.', val: tiempoCiclo !== null ? `${tiempoCiclo}d` : '—',
+              badge: `${resumen?.lotesLiberadosEnAlcance ?? 0} liberado${(resumen?.lotesLiberadosEnAlcance ?? 0) !== 1 ? 's' : ''}`,
+              badgeColor: C.purple,
+              accentFrom: '#7C3AED', accentTo: '#A78BFA',
+              icon: 'fa-hourglass-half', iconBg: '#F5F3FF', iconC: C.purple,
             },
           ] as const).map(k => (
             <div key={k.label} className="db-kpi" role="listitem" tabIndex={0} aria-label={`${k.label}: ${k.val}`}>
@@ -510,7 +591,7 @@ export function DashboardPage() {
               <div className="db-card-icon" style={{ background: '#F5F3FF', color: C.purple }} aria-hidden="true"><i className="fa fa-circle-half-stroke" /></div>
               <div className="db-card-title">Estado de Batch Records</div>
             </div>
-            <div className="db-card-sub">{cnt.tot} lotes en total</div>
+            <div className="db-card-sub">{cnt.tot} lotes · {periodoLabel.toLowerCase()}</div>
             <div
               className="donut-wrap"
               role="img"
@@ -558,7 +639,7 @@ export function DashboardPage() {
               <div className="db-card-icon" style={{ background: '#EEF2FF', color: C.blue }} aria-hidden="true"><i className="fa fa-chart-bar" /></div>
               <div className="db-card-title">Batch Records por material</div>
             </div>
-            <div className="db-card-sub">Acumulado · todos los estados</div>
+            <div className="db-card-sub">Todos los estados · {periodoLabel.toLowerCase()}</div>
             <div role="img" aria-label="Gráfico de barras: cantidad de batch records por material">
               <Bar
                 data={{
@@ -588,20 +669,24 @@ export function DashboardPage() {
               <div className="db-card-title">Actividad reciente</div>
             </div>
             <div className="db-card-sub">Últimas acciones registradas</div>
-            <div className="act-list" role="list" aria-label="Actividad reciente">
-              {recent.map((a, i) => (
-                <div key={i} className="act-item" role="listitem">
-                  <div className="act-dot" style={{ background: a.color + '18', color: a.color }} aria-hidden="true">
-                    <i className="fa fa-clipboard-list" />
+            {recent.length === 0 ? (
+              <div className="empty"><i className="fa fa-clock-rotate-left" aria-hidden="true" /><span>Sin actividad registrada</span></div>
+            ) : (
+              <div className="act-list" role="list" aria-label="Actividad reciente">
+                {recent.map((a, i) => (
+                  <div key={i} className="act-item" role="listitem">
+                    <div className="act-dot" style={{ background: a.color + '18', color: a.color }} aria-hidden="true">
+                      <i className={`fa ${a.icon}`} />
+                    </div>
+                    <div className="act-body">
+                      <div className="act-main">{a.br} · {a.mat}</div>
+                      <div className="act-sub">{a.accionLabel} · {a.user}</div>
+                    </div>
+                    <div className="act-time" aria-label={`Hace ${a.tiempo}`}>{a.tiempo}</div>
                   </div>
-                  <div className="act-body">
-                    <div className="act-main">{a.br} · {a.mat}</div>
-                    <div className="act-sub">{a.estado} · {a.user}</div>
-                  </div>
-                  <div className="act-time" aria-label={`Hace ${a.tiempo}`}>{a.tiempo}</div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

@@ -11,6 +11,65 @@ import { verificarPin } from '../services/pin.js'
 
 export const batchRecordsRouter = Router()
 
+// Las únicas entidades de auditoría cuyo idEntidad es un idBatchRecord (ver logAudit en este
+// archivo y en desviaciones.ts) — debe coincidir con ENTIDADES_DE_BR en
+// src/features/batch-record/EditarBatchRecord.tsx (frontend), que arma el mismo criterio para
+// el panel de auditoría embebido.
+const ENTIDADES_DE_BR = ['BatchRecord', 'DetalleValores', 'FirmaSeccion', 'FirmaCierre', 'Desviacion']
+
+// `BatchRecord.fechaModificacion` (@updatedAt) solo cambia cuando el propio registro se
+// actualiza — firmar una sección, guardar un campo del formulario o cerrar una etapa no tocan
+// esa columna (solo lo hacen firmar el cierre, liberar, cancelar o derogar). Usarla como "última
+// actividad" hace que un lote con trabajo diario real (llenando formularios, cerrando etapas)
+// aparezca como "sin actividad" — la última actividad real hay que sacarla del propio audit
+// trail, que sí se registra en cada uno de esos pasos.
+async function ultimaActividadPorBatchRecord(ids: number[]): Promise<Map<number, Date>> {
+  if (ids.length === 0) return new Map()
+  const idsStr = ids.map(String)
+  const agregados = await prisma.auditEntry.groupBy({
+    by: ['idEntidad'],
+    where: { idEntidad: { in: idsStr }, entidad: { in: ENTIDADES_DE_BR } },
+    _max: { timestamp: true },
+  })
+  return new Map(
+    agregados
+      .filter((a): a is typeof a & { _max: { timestamp: Date } } => a._max.timestamp !== null)
+      .map((a) => [Number(a.idEntidad), a._max.timestamp])
+  )
+}
+
+// "Actividad reciente" del Dashboard mostraba los últimos 6 Batch Records CREADOS — como el
+// 99% de los lotes se crean y arrancan a trabajarse el mismo día, en la práctica esa lista casi
+// nunca cambiaba durante el resto de su ciclo de vida, aunque hubiera firmas, cierres de etapa o
+// desviaciones ocurriendo todo el tiempo. Estos son los eventos reales del audit trail — se
+// acota por Centro (no por `dias`: es "qué está pasando ahora mismo", no un reporte histórico).
+async function actividadRecienteDeBR(idCentro: number | undefined, take = 8) {
+  const where: Record<string, unknown> = { entidad: { in: ENTIDADES_DE_BR } }
+  if (idCentro !== undefined) {
+    const brsDelCentro = await prisma.batchRecord.findMany({ where: { idCentro }, select: { idBatchRecord: true } })
+    where.idEntidad = { in: brsDelCentro.map((b) => String(b.idBatchRecord)) }
+  }
+
+  const entries = await prisma.auditEntry.findMany({ where, orderBy: { timestamp: 'desc' }, take })
+  const ids = [...new Set(entries.map((e) => Number(e.idEntidad)))]
+  const brs = await prisma.batchRecord.findMany({
+    where: { idBatchRecord: { in: ids } },
+    select: { idBatchRecord: true, ordenProceso: { select: { codigoMaterial: true } } },
+  })
+  const materialPorBr = new Map(brs.map((b) => [b.idBatchRecord, b.ordenProceso.codigoMaterial]))
+
+  return entries.map((e) => ({
+    idBatchRecord: Number(e.idEntidad),
+    accion: e.accion,
+    descripcionEntidad: e.descripcionEntidad,
+    nombreUsuario: e.nombreUsuario,
+    loginUsuario: e.loginUsuario,
+    timestamp: e.timestamp,
+    motivo: e.motivo,
+    codigoMaterial: materialPorBr.get(Number(e.idEntidad)) ?? null,
+  }))
+}
+
 batchRecordsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -18,7 +77,88 @@ batchRecordsRouter.get(
     const where: Record<string, unknown> = {}
     if (typeof idEstado === 'string' && idEstado) where.idEstado = Number(idEstado)
     if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
-    res.json(await prisma.batchRecord.findMany({ where, orderBy: { fechaCreacion: 'desc' } }))
+    const registros = await prisma.batchRecord.findMany({
+      where, orderBy: { fechaCreacion: 'desc' },
+      include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
+    })
+    const actividad = await ultimaActividadPorBatchRecord(registros.map((r) => r.idBatchRecord))
+    res.json(registros.map((r) => ({
+      ...r,
+      ultimaActividad: actividad.get(r.idBatchRecord) ?? r.fechaModificacion,
+    })))
+  })
+)
+
+// El Dashboard es la página de inicio — antes de este endpoint traía el historial COMPLETO de
+// Batch Records (sin límite) solo para calcular conteos y un top de materiales, y ese costo
+// (tanto de red como de memoria del navegador) crecía sin techo con la producción acumulada.
+// Este endpoint calcula los agregados en el propio servidor: `porEstado` va por groupBy (una
+// consulta indexada, no una carga completa) y `actividadReciente` solo trae los últimos eventos
+// del audit trail. `porMaterial` sigue necesitando recorrer la tabla — Prisma no permite un
+// groupBy a través del join con OrdenProceso — pero al menos ya no viaja fila por fila hasta el
+// navegador.
+//
+// `idCentro` acota todo el resumen a una planta — sin filtro, una operación con más de un Centro
+// mezclaría la producción de todos en un solo número global. `dias` acota por fecha de creación
+// (omitido = todo el histórico) — sin él, el donut y la barra de materiales son un acumulado de
+// toda la vida de la planta que no dice nada sobre "qué está pasando ahora".
+batchRecordsRouter.get(
+  '/resumen',
+  asyncHandler(async (req, res) => {
+    const { idCentro, dias } = req.query
+    const idCentroNum = typeof idCentro === 'string' && idCentro ? Number(idCentro) : undefined
+    const where: Record<string, unknown> = {}
+    if (idCentroNum !== undefined) where.idCentro = idCentroNum
+    if (typeof dias === 'string' && dias) {
+      where.fechaCreacion = { gte: new Date(Date.now() - Number(dias) * 86400000) }
+    }
+
+    const [porEstadoRaw, actividadReciente, todos, liberados, desviacionesAbiertas] = await Promise.all([
+      prisma.batchRecord.groupBy({ by: ['idEstado'], where, _count: { idEstado: true } }),
+      actividadRecienteDeBR(idCentroNum),
+      prisma.batchRecord.findMany({
+        where, select: { idOrdenProceso: true, ordenProceso: { select: { codigoMaterial: true } } },
+      }),
+      // Tiempo de ciclo (creación → liberación) de los lotes liberados dentro del mismo alcance.
+      prisma.batchRecord.findMany({
+        where: { ...where, idEstado: 4 },
+        select: { fechaCreacion: true, liberacion: { select: { liberadoEn: true } } },
+      }),
+      prisma.desviacion.count({
+        where: { estado: 'abierta', ...(idCentroNum !== undefined ? { batchRecord: { idCentro: idCentroNum } } : {}) },
+      }),
+    ])
+
+    const porEstado = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<1 | 2 | 3 | 4, number>
+    for (const r of porEstadoRaw) {
+      if (r.idEstado in porEstado) porEstado[r.idEstado as 1 | 2 | 3 | 4] = r._count.idEstado
+    }
+
+    const porMaterialMapa: Record<string, number> = {}
+    for (const r of todos) {
+      porMaterialMapa[r.ordenProceso.codigoMaterial] = (porMaterialMapa[r.ordenProceso.codigoMaterial] ?? 0) + 1
+    }
+    const porMaterial = Object.entries(porMaterialMapa)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([codigoMaterial, cantidad]) => ({ codigoMaterial, cantidad }))
+
+    const diasCiclo = liberados
+      .filter((l) => l.liberacion)
+      .map((l) => (l.liberacion!.liberadoEn.getTime() - l.fechaCreacion.getTime()) / 86400000)
+    const tiempoCicloPromedioDias = diasCiclo.length > 0
+      ? Math.round((diasCiclo.reduce((s, d) => s + d, 0) / diasCiclo.length) * 10) / 10
+      : null
+
+    res.json({
+      total: todos.length,
+      porEstado,
+      porMaterial,
+      tiempoCicloPromedioDias,
+      lotesLiberadosEnAlcance: diasCiclo.length,
+      desviacionesAbiertas,
+      actividadReciente,
+    })
   })
 )
 

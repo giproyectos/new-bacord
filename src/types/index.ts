@@ -43,6 +43,11 @@ export interface BatchRecord {
   idOrdenProceso: number; motivoEstado: string; idEstado: number; idCentro: number
   idUsuarioCreacion: number; fechaCreacion: string; idUsuarioModificacion: number
   fechaModificacion: string; porcentajeAvance?: number
+  ordenProceso?: { codigoMaterial: string; descripcionMaterial: string }
+  // Última actividad real (firma, guardar un campo, cerrar una etapa...) según el audit trail —
+  // a diferencia de fechaModificacion, que solo cambia al firmar el cierre, liberar, cancelar o
+  // derogar. Ver ultimaActividadPorBatchRecord en el backend.
+  ultimaActividad?: string
 }
 export interface Firma {
   idFirma: number; codigo: string; descripcion: string; texto: string; activo: number; idGrupo: number
