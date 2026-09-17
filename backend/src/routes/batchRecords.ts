@@ -64,17 +64,37 @@ batchRecordsRouter.get(
 // consulta indexada, no una carga completa) y `recientes` solo trae los últimos 6 registros.
 // `porMaterial` sigue necesitando recorrer la tabla — Prisma no permite un groupBy a través del
 // join con OrdenProceso — pero al menos ya no viaja fila por fila hasta el navegador.
+//
+// `idCentro` acota todo el resumen a una planta — sin filtro, una operación con más de un Centro
+// mezclaría la producción de todos en un solo número global. `dias` acota por fecha de creación
+// (omitido = todo el histórico) — sin él, el donut y la barra de materiales son un acumulado de
+// toda la vida de la planta que no dice nada sobre "qué está pasando ahora".
 batchRecordsRouter.get(
   '/resumen',
-  asyncHandler(async (_req, res) => {
-    const [porEstadoRaw, recientes, todos] = await Promise.all([
-      prisma.batchRecord.groupBy({ by: ['idEstado'], _count: { idEstado: true } }),
+  asyncHandler(async (req, res) => {
+    const { idCentro, dias } = req.query
+    const where: Record<string, unknown> = {}
+    if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
+    if (typeof dias === 'string' && dias) {
+      where.fechaCreacion = { gte: new Date(Date.now() - Number(dias) * 86400000) }
+    }
+
+    const [porEstadoRaw, recientes, todos, liberados, desviacionesAbiertas] = await Promise.all([
+      prisma.batchRecord.groupBy({ by: ['idEstado'], where, _count: { idEstado: true } }),
       prisma.batchRecord.findMany({
-        orderBy: { fechaCreacion: 'desc' }, take: 6,
+        where, orderBy: { fechaCreacion: 'desc' }, take: 6,
         include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
       }),
       prisma.batchRecord.findMany({
-        select: { idOrdenProceso: true, ordenProceso: { select: { codigoMaterial: true } } },
+        where, select: { idOrdenProceso: true, ordenProceso: { select: { codigoMaterial: true } } },
+      }),
+      // Tiempo de ciclo (creación → liberación) de los lotes liberados dentro del mismo alcance.
+      prisma.batchRecord.findMany({
+        where: { ...where, idEstado: 4 },
+        select: { fechaCreacion: true, liberacion: { select: { liberadoEn: true } } },
+      }),
+      prisma.desviacion.count({
+        where: { estado: 'abierta', ...(where.idCentro ? { batchRecord: { idCentro: where.idCentro } } : {}) },
       }),
     ])
 
@@ -92,10 +112,20 @@ batchRecordsRouter.get(
       .slice(0, 6)
       .map(([codigoMaterial, cantidad]) => ({ codigoMaterial, cantidad }))
 
+    const diasCiclo = liberados
+      .filter((l) => l.liberacion)
+      .map((l) => (l.liberacion!.liberadoEn.getTime() - l.fechaCreacion.getTime()) / 86400000)
+    const tiempoCicloPromedioDias = diasCiclo.length > 0
+      ? Math.round((diasCiclo.reduce((s, d) => s + d, 0) / diasCiclo.length) * 10) / 10
+      : null
+
     res.json({
       total: todos.length,
       porEstado,
       porMaterial,
+      tiempoCicloPromedioDias,
+      lotesLiberadosEnAlcance: diasCiclo.length,
+      desviacionesAbiertas,
       recientes: recientes.map((r) => ({
         idBatchRecord: r.idBatchRecord, idEstado: r.idEstado, fechaCreacion: r.fechaCreacion,
         idUsuarioCreacion: r.idUsuarioCreacion, codigoMaterial: r.ordenProceso.codigoMaterial,

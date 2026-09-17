@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 import { app } from '../src/app.js'
-import { resetDb } from './helpers/db.js'
+import { resetDb, prisma } from './helpers/db.js'
 import { crearEscenarioBasico } from './helpers/fixtures.js'
 import { tokenPara } from './helpers/auth.js'
 
@@ -67,5 +67,55 @@ describe('GET /api/batch-records/resumen', () => {
       idEstado: 1,
       codigoMaterial: esc.material.codigo,
     })
+  })
+
+  it('`dias` acota por fecha de creación — un lote más viejo que la ventana no cuenta', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.batchRecord.update({
+      where: { idBatchRecord: esc.batchRecord.idBatchRecord },
+      data: { fechaCreacion: new Date(Date.now() - 60 * 86400000) },
+    })
+
+    const dentro = await request(app).get('/api/batch-records/resumen?dias=90').set('Authorization', `Bearer ${token}`)
+    expect(dentro.body.total).toBe(1)
+
+    const fuera = await request(app).get('/api/batch-records/resumen?dias=30').set('Authorization', `Bearer ${token}`)
+    expect(fuera.body.total).toBe(0)
+  })
+
+  it('tiempoCicloPromedioDias promedia creación → liberación de los lotes liberados en el alcance', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const fechaCreacion = new Date(Date.now() - 5 * 86400000)
+    await prisma.batchRecord.update({
+      where: { idBatchRecord: esc.batchRecord.idBatchRecord },
+      data: { fechaCreacion, idEstado: 4 },
+    })
+    await prisma.batchRecordLiberacion.create({
+      data: { idBatchRecord: esc.batchRecord.idBatchRecord, idUsuario: esc.usuarioAdmin.idUsuario, liberadoEn: new Date() },
+    })
+
+    const res = await request(app).get('/api/batch-records/resumen').set('Authorization', `Bearer ${token}`)
+
+    expect(res.body.lotesLiberadosEnAlcance).toBe(1)
+    expect(res.body.tiempoCicloPromedioDias).toBeCloseTo(5, 0)
+  })
+
+  it('desviacionesAbiertas cuenta las desviaciones sin cerrar', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await request(app)
+      .post('/api/desviaciones')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle: esc.procesos[0].idDetalle,
+        campo: 'peso', labelCampo: 'Peso', valorIngresado: '999', limiteInfo: 'Máximo 100',
+        descripcion: 'Justificación de la desviación',
+      })
+
+    const res = await request(app).get('/api/batch-records/resumen').set('Authorization', `Bearer ${token}`)
+
+    expect(res.body.desviacionesAbiertas).toBe(1)
   })
 })
