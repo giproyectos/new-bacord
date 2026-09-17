@@ -18,7 +18,57 @@ batchRecordsRouter.get(
     const where: Record<string, unknown> = {}
     if (typeof idEstado === 'string' && idEstado) where.idEstado = Number(idEstado)
     if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
-    res.json(await prisma.batchRecord.findMany({ where, orderBy: { fechaCreacion: 'desc' } }))
+    res.json(await prisma.batchRecord.findMany({
+      where, orderBy: { fechaCreacion: 'desc' },
+      include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
+    }))
+  })
+)
+
+// El Dashboard es la página de inicio — antes de este endpoint traía el historial COMPLETO de
+// Batch Records (sin límite) solo para calcular conteos y un top de materiales, y ese costo
+// (tanto de red como de memoria del navegador) crecía sin techo con la producción acumulada.
+// Este endpoint calcula los agregados en el propio servidor: `porEstado` va por groupBy (una
+// consulta indexada, no una carga completa) y `recientes` solo trae los últimos 6 registros.
+// `porMaterial` sigue necesitando recorrer la tabla — Prisma no permite un groupBy a través del
+// join con OrdenProceso — pero al menos ya no viaja fila por fila hasta el navegador.
+batchRecordsRouter.get(
+  '/resumen',
+  asyncHandler(async (_req, res) => {
+    const [porEstadoRaw, recientes, todos] = await Promise.all([
+      prisma.batchRecord.groupBy({ by: ['idEstado'], _count: { idEstado: true } }),
+      prisma.batchRecord.findMany({
+        orderBy: { fechaCreacion: 'desc' }, take: 6,
+        include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
+      }),
+      prisma.batchRecord.findMany({
+        select: { idOrdenProceso: true, ordenProceso: { select: { codigoMaterial: true } } },
+      }),
+    ])
+
+    const porEstado = { 1: 0, 2: 0, 3: 0, 4: 0 } as Record<1 | 2 | 3 | 4, number>
+    for (const r of porEstadoRaw) {
+      if (r.idEstado in porEstado) porEstado[r.idEstado as 1 | 2 | 3 | 4] = r._count.idEstado
+    }
+
+    const porMaterialMapa: Record<string, number> = {}
+    for (const r of todos) {
+      porMaterialMapa[r.ordenProceso.codigoMaterial] = (porMaterialMapa[r.ordenProceso.codigoMaterial] ?? 0) + 1
+    }
+    const porMaterial = Object.entries(porMaterialMapa)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([codigoMaterial, cantidad]) => ({ codigoMaterial, cantidad }))
+
+    res.json({
+      total: todos.length,
+      porEstado,
+      porMaterial,
+      recientes: recientes.map((r) => ({
+        idBatchRecord: r.idBatchRecord, idEstado: r.idEstado, fechaCreacion: r.fechaCreacion,
+        idUsuarioCreacion: r.idUsuarioCreacion, codigoMaterial: r.ordenProceso.codigoMaterial,
+      })),
+    })
   })
 )
 

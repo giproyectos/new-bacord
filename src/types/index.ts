@@ -43,6 +43,7 @@ export interface BatchRecord {
   idOrdenProceso: number; motivoEstado: string; idEstado: number; idCentro: number
   idUsuarioCreacion: number; fechaCreacion: string; idUsuarioModificacion: number
   fechaModificacion: string; porcentajeAvance?: number
+  ordenProceso?: { codigoMaterial: string; descripcionMaterial: string }
 }
 export interface Firma {
   idFirma: number; codigo: string; descripcion: string; texto: string; activo: number; idGrupo: number

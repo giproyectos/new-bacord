@@ -63,9 +63,24 @@ export interface EstructuraProceso {
   detalles: { id: number; idDetalle: number; orden: number; detalle: EstructuraDetalle }[]
 }
 
+export interface BatchRecordResumen {
+  total: number
+  porEstado: Record<1 | 2 | 3 | 4, number>
+  porMaterial: { codigoMaterial: string; cantidad: number }[]
+  recientes: {
+    idBatchRecord: number; idEstado: number; fechaCreacion: string
+    idUsuarioCreacion: number; codigoMaterial: string
+  }[]
+}
+
 export const batchRecordApi = {
   buscar: async (f?: BusquedaBatchRecord): Promise<BatchRecord[]> =>
     (await http.get<BatchRecord[]>('/batch-records', { params: f })).data,
+
+  // Agregados (conteos por estado/material, últimos 6) calculados en el servidor — para el
+  // Dashboard, que no necesita el historial completo de Batch Records para mostrar un resumen.
+  resumen: async (): Promise<BatchRecordResumen> =>
+    (await http.get<BatchRecordResumen>('/batch-records/resumen')).data,
 
   find: async (id: number): Promise<BatchRecord> => (await http.get<BatchRecord>(`/batch-records/${id}`)).data,
 

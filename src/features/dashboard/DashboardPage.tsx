@@ -7,7 +7,6 @@ import {
 import { Doughnut, Bar } from 'react-chartjs-2'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { batchRecordApi } from '@/api/batchRecord'
-import { ordenProcesoApi } from '@/api/ordenProceso'
 import { usuariosApi } from '@/api/usuarios'
 import { desviacionesApi } from '@/api/desviaciones'
 
@@ -54,27 +53,30 @@ function progressGrad(avance: number) {
 }
 
 export function DashboardPage() {
-  const { data: batchRecords = [] } = useQuery({ queryKey: ['batch-records'], queryFn: () => batchRecordApi.buscar() })
-  const { data: ordenes = [] } = useQuery({ queryKey: ['ordenes-proceso'], queryFn: () => ordenProcesoApi.buscar() })
+  // El Dashboard es la página de inicio — a diferencia de una pantalla de consulta puntual, no
+  // puede cargar el historial completo de Batch Records en cada visita (crecería sin techo con
+  // la producción acumulada). Se piden solo los estados que de verdad se necesitan en detalle
+  // (activos y cancelados, para las tarjetas y alertas de abajo) y un resumen agregado calculado
+  // en el servidor (conteos y últimos 6) para el donut, la barra y la actividad reciente.
+  const { data: batchRecordsActivos = [] } = useQuery({ queryKey: ['batch-records', 'activos'], queryFn: () => batchRecordApi.buscar({ idEstado: 1 }) })
+  const { data: batchRecordsCancelados = [] } = useQuery({ queryKey: ['batch-records', 'cancelados'], queryFn: () => batchRecordApi.buscar({ idEstado: 3 }) })
+  const { data: resumen } = useQuery({ queryKey: ['batch-records', 'resumen'], queryFn: () => batchRecordApi.resumen() })
   const { data: usuarios = [] } = useQuery({ queryKey: ['usuarios'], queryFn: () => usuariosApi.listar() })
   const { data: desviaciones = [] } = useQuery({ queryKey: ['desviaciones'], queryFn: () => desviacionesApi.listar() })
 
   // ── Lotes activos ─────────────────────────────────────────────────────────
-  const brsActivosBase = batchRecords
-    .filter(br => br.idEstado === 1)
-    .map(br => {
-      const op  = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-      const dias = Math.floor((Date.now() - new Date(br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
-      return {
-        id: br.idBatchRecord,
-        codigo: `BR-${br.idBatchRecord}`,
-        material: op?.codigoMaterial ?? '—',
-        producto: op?.descripcionMaterial?.split(' ').slice(0, 5).join(' ') ?? '—',
-        avance: br.porcentajeAvance ?? 0,
-        dias,
-        fechaCreacion: br.fechaCreacion,
-      }
-    })
+  const brsActivosBase = batchRecordsActivos.map(br => {
+    const dias = Math.floor((Date.now() - new Date(br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
+    return {
+      id: br.idBatchRecord,
+      codigo: `BR-${br.idBatchRecord}`,
+      material: br.ordenProceso?.codigoMaterial ?? '—',
+      producto: br.ordenProceso?.descripcionMaterial?.split(' ').slice(0, 5).join(' ') ?? '—',
+      avance: br.porcentajeAvance ?? 0,
+      dias,
+      fechaCreacion: br.fechaCreacion,
+    }
+  })
 
   const estructuraQueries = useQueries({
     queries: brsActivosBase.map(br => ({ queryKey: ['br-estructura', br.id], queryFn: () => batchRecordApi.getEstructura(br.id) })),
@@ -128,9 +130,8 @@ export function DashboardPage() {
     if (br.avance === 0 && br.dias >= 5)
       alertas.push({ nivel: 'baja',  icon: 'fa-hourglass-start', titulo: `${br.codigo} · Proceso no iniciado`, detalle: `${br.producto} · creado hace ${br.dias} días` })
   })
-  batchRecords.filter(br => br.idEstado === 3).forEach(br => {
-    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-    alertas.push({ nivel: 'media', icon: 'fa-ban', titulo: `BR-${br.idBatchRecord} · Lote cancelado`, detalle: `${op?.codigoMaterial ?? '—'} · ${br.motivoEstado?.slice(0, 60) || 'sin motivo'}` })
+  batchRecordsCancelados.forEach(br => {
+    alertas.push({ nivel: 'media', icon: 'fa-ban', titulo: `BR-${br.idBatchRecord} · Lote cancelado`, detalle: `${br.ordenProceso?.codigoMaterial ?? '—'} · ${br.motivoEstado?.slice(0, 60) || 'sin motivo'}` })
   })
   desviaciones.filter(d => d.estado === 'abierta').forEach(d => {
     alertas.push({ nivel: 'alta', icon: 'fa-triangle-exclamation', titulo: `BR-${d.idBatchRecord} · Desviación abierta — ${d.campo}`, detalle: `${d.labelCampo} — valor registrado: ${d.valorIngresado}` })
@@ -138,31 +139,23 @@ export function DashboardPage() {
 
   // ── Donut ─────────────────────────────────────────────────────────────────
   const cnt = {
-    trat: batchRecords.filter(b => b.idEstado === 1).length,
-    fin:  batchRecords.filter(b => b.idEstado === 2).length,
-    can:  batchRecords.filter(b => b.idEstado === 3).length,
-    lib:  batchRecords.filter(b => b.idEstado === 4).length,
-    tot:  batchRecords.length,
+    trat: resumen?.porEstado[1] ?? 0,
+    fin:  resumen?.porEstado[2] ?? 0,
+    can:  resumen?.porEstado[3] ?? 0,
+    lib:  resumen?.porEstado[4] ?? 0,
+    tot:  resumen?.total ?? 0,
   }
 
   // ── Bar ───────────────────────────────────────────────────────────────────
-  const matMap: Record<string, number> = {}
-  batchRecords.forEach(br => {
-    const op = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
-    if (op) matMap[op.codigoMaterial] = (matMap[op.codigoMaterial] ?? 0) + 1
-  })
-  const matEntries = Object.entries(matMap).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const matEntries: [string, number][] = (resumen?.porMaterial ?? []).map(m => [m.codigoMaterial, m.cantidad])
   const barGrads   = ['#1D4ED8', '#EA580C', '#0891B2', '#059669', '#7C3AED', '#DB2777']
 
   // ── Actividad ─────────────────────────────────────────────────────────────
-  const recent = [...batchRecords]
-    .sort((a, b) => new Date(b.fechaCreacion).getTime() - new Date(a.fechaCreacion).getTime())
-    .slice(0, 6)
+  const recent = (resumen?.recientes ?? [])
     .map(br => {
-      const op   = ordenes.find(o => o.idOrdenProceso === br.idOrdenProceso)
       const user = usuarios.find(u => u.idUsuario === br.idUsuarioCreacion)
       const cfg  = { 1: { label: 'En proceso', color: C.teal }, 2: { label: 'Finalizado', color: C.forest }, 3: { label: 'Cancelado', color: C.red }, 4: { label: 'Liberado', color: C.purple } } as Record<number, {label:string;color:string}>
-      return { br: `BR-${br.idBatchRecord}`, mat: op?.codigoMaterial ?? '—', estado: cfg[br.idEstado]?.label ?? '?', color: cfg[br.idEstado]?.color ?? C.slate, user: user?.login ?? 'sistema', tiempo: relTime(br.fechaCreacion) }
+      return { br: `BR-${br.idBatchRecord}`, mat: br.codigoMaterial ?? '—', estado: cfg[br.idEstado]?.label ?? '?', color: cfg[br.idEstado]?.color ?? C.slate, user: user?.login ?? 'sistema', tiempo: relTime(br.fechaCreacion) }
     })
 
   const nivCfg  = { alta: { c: C.red, bg: '#FFF1F1', lbl: 'Alta' }, media: { c: C.amber, bg: '#FFFBEB', lbl: 'Media' }, baja: { c: C.slate, bg: '#F8FAFC', lbl: 'Baja' } }
