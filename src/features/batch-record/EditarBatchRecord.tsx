@@ -685,21 +685,35 @@ function missingRequired(jsonSchema: string, data: Record<string, unknown>): Val
 }
 
 // ── Desviación modal ─────────────────────────────────────────────────────
+// Reportar la desviación es una escritura real al backend (POST /api/desviaciones) — si falla
+// (red, sesión vencida, validación), el modal debe mostrar el error en vez de marcar "registrada"
+// sin haber esperado la respuesta, o el operario se queda creyendo que quedó documentada cuando
+// en realidad nunca llegó a guardarse.
 function DesviacionModal({ error, valorIngresado, detalleCode, onSubmit, onClose }: {
   error: FormioRangeError
   valorIngresado: string
   detalleCode: string
-  onSubmit: (desc: string) => void
+  onSubmit: (desc: string) => Promise<{ estado: boolean; mensaje: string }>
   onClose: () => void
 }) {
   const user = useAuthStore(s => s.user)
   const [desc, setDesc] = useState('')
   const [done, setDone] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!desc.trim()) return
-    onSubmit(desc.trim())
-    setDone(true)
+    setLoading(true); setErrorMsg('')
+    try {
+      const result = await onSubmit(desc.trim())
+      if (!result.estado) { setErrorMsg(result.mensaje); return }
+      setDone(true)
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudo registrar la desviación')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -764,16 +778,23 @@ function DesviacionModal({ error, valorIngresado, detalleCode, onSubmit, onClose
                 <i className="fa fa-user" style={{ marginRight: 5 }} />
                 Reportado por: <strong>{user?.nombres ?? user?.login}</strong> · {new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
+              {errorMsg && (
+                <div style={{ padding: '8px 12px', background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: 8, fontSize: 12.5, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <i className="fa fa-exclamation-circle" />{errorMsg}
+                </div>
+              )}
             </div>
             <div style={{ padding: '12px 18px', borderTop: '1px solid #F1F5F9', display: 'flex', justifyContent: 'flex-end', gap: 8, background: '#F8FAFC' }}>
               <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>Cancelar</button>
               <button
                 className="btn btn-warning"
-                style={{ fontSize: 12, opacity: desc.trim() ? 1 : 0.5, cursor: desc.trim() ? 'pointer' : 'not-allowed' }}
-                disabled={!desc.trim()}
+                style={{ fontSize: 12, opacity: desc.trim() && !loading ? 1 : 0.5, cursor: desc.trim() && !loading ? 'pointer' : 'not-allowed' }}
+                disabled={!desc.trim() || loading}
                 onClick={handleSubmit}
               >
-                <i className="fa fa-triangle-exclamation" /> Registrar Desviación
+                {loading
+                  ? <><i className="fa fa-spinner fa-spin" /> Registrando...</>
+                  : <><i className="fa fa-triangle-exclamation" /> Registrar Desviación</>}
               </button>
             </div>
           </>
@@ -794,7 +815,7 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   lockedKeys?: string[]
   onFormData?: (detalleId: number, prev: Record<string,unknown>, next: Record<string,unknown>, labels: Record<string,string>) => void
   onRequestDerogar?: (firmaKey: string, detalleId: number, firmaInfo: FirmaInfo, texto: string, grupo: string) => void
-  onDesviacion?: (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => void
+  onDesviacion?: (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => Promise<{ estado: boolean; mensaje: string }>
   onRequestCerrarDesviacion?: (desviacion: Desviacion) => void
   preLlenado?: PreLlenadoBR | null
   // Etiqueta legible del campo que tiene el foco ahora mismo en este formulario (o null al
@@ -838,17 +859,26 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   const cierFirmadas = firmasCierre.filter(f => !!firmados[`cie:${detalle.id}:${f.idFirma}`]).length
   const allCierDone  = firmasCierre.length > 0 && cierFirmadas === firmasCierre.length
 
+  const detDesviaciones = desviaciones.filter(d => d.idDetalle === detalle.id)
+  // Un valor fuera de rango que form.io sigue marcando como inválido, y para el que nunca se
+  // reportó una Desviación (abierta o cerrada), no puede firmarse — de lo contrario el lote
+  // podía firmarse y hasta liberarse sin que Calidad se enterara del valor fuera de especificación,
+  // porque "Reportar Desviación" era enteramente opcional y nada más lo exigía.
+  const rangeErrorsSinDesviacion = rangeErrors.filter(err => !detDesviaciones.some(d => d.campo === err.key))
+
   const handleFirmar = (firma: EstructuraFirmaItem) => {
     const missing = missingRequired(detalle.jsonSchema ?? '', savedDataRef.current)
     if (missing.length > 0) {
       setValidationErrors(missing)
       return
     }
+    if (rangeErrorsSinDesviacion.length > 0) {
+      setValidationErrors(rangeErrorsSinDesviacion.map(err => ({ label: `${err.label} — reporte una desviación antes de firmar` })))
+      return
+    }
     setValidationErrors([])
     onFirmar(firma)
   }
-
-  const detDesviaciones = desviaciones.filter(d => d.idDetalle === detalle.id)
 
   return (
     <div className={`det-card${open ? ' det-open' : ''}`}
@@ -949,38 +979,55 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
                   Valor fuera de rango — revisa antes de firmar
                 </span>
               </div>
-              {rangeErrors.map((err, i) => (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  background: '#fff', borderRadius: 7, padding: '5px 10px',
-                  border: '1px solid #FDE68A',
-                }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: '#78350F', flex: 1 }}>
-                    {err.label}
-                  </span>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, color: '#D97706',
-                    background: '#FEF3C7', borderRadius: 20,
-                    padding: '2px 8px', letterSpacing: '0.04em', textTransform: 'uppercase',
-                    flexShrink: 0,
+              {rangeErrors.map((err, i) => {
+                const yaReportada = detDesviaciones.some(d => d.campo === err.key)
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: '#fff', borderRadius: 7, padding: '5px 10px',
+                    border: '1px solid #FDE68A',
                   }}>
-                    fuera de rango
-                  </span>
-                  {!readonly && (
-                    <button
-                      style={{
-                        fontSize: 11, fontWeight: 700, color: '#92400E',
-                        background: '#FEF3C7', border: '1px solid #FCD34D',
-                        borderRadius: 6, padding: '3px 10px', cursor: 'pointer', flexShrink: 0,
-                        display: 'flex', alignItems: 'center', gap: 4,
-                      }}
-                      onClick={() => setDesviacionModal({ error: err, valorIngresado: String(savedDataRef.current[err.key] ?? '') })}
-                    >
-                      <i className="fa fa-flag" style={{ fontSize: 9 }} /> Reportar
-                    </button>
-                  )}
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: '#78350F', flex: 1 }}>
+                      {err.label}
+                    </span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, color: '#D97706',
+                      background: '#FEF3C7', borderRadius: 20,
+                      padding: '2px 8px', letterSpacing: '0.04em', textTransform: 'uppercase',
+                      flexShrink: 0,
+                    }}>
+                      fuera de rango
+                    </span>
+                    {yaReportada ? (
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, color: '#065F46',
+                        background: '#D1FAE5', borderRadius: 6, padding: '3px 10px',
+                        flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4,
+                      }}>
+                        <i className="fa fa-check" style={{ fontSize: 9 }} /> Desviación reportada
+                      </span>
+                    ) : !readonly && (
+                      <button
+                        style={{
+                          fontSize: 11, fontWeight: 700, color: '#92400E',
+                          background: '#FEF3C7', border: '1px solid #FCD34D',
+                          borderRadius: 6, padding: '3px 10px', cursor: 'pointer', flexShrink: 0,
+                          display: 'flex', alignItems: 'center', gap: 4,
+                        }}
+                        onClick={() => setDesviacionModal({ error: err, valorIngresado: String(savedDataRef.current[err.key] ?? '') })}
+                      >
+                        <i className="fa fa-flag" style={{ fontSize: 9 }} /> Reportar
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {rangeErrorsSinDesviacion.length > 0 && (
+                <div style={{ fontSize: 11, color: '#92400E', fontWeight: 600 }}>
+                  <i className="fa fa-lock" style={{ marginRight: 5 }} />
+                  No se puede firmar hasta reportar una desviación para cada valor fuera de rango.
                 </div>
-              ))}
+              )}
             </div>
           )}
 
@@ -1174,6 +1221,9 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
                       )
                       : (!readonly && !bloq && (
                           <button className="btn btn-warning" style={{ fontSize: 12, flexShrink: 0 }}
+                            disabled={rangeErrorsSinDesviacion.length > 0}
+                            aria-disabled={rangeErrorsSinDesviacion.length > 0}
+                            title={rangeErrorsSinDesviacion.length > 0 ? 'Reporte una desviación para cada valor fuera de rango antes de firmar' : undefined}
                             onClick={() => handleFirmar(firma)}>
                             <i className="fa fa-pen" /> Firmar
                           </button>
@@ -1194,7 +1244,8 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
           valorIngresado={desviacionModal.valorIngresado}
           detalleCode={detalle.codigo}
           onSubmit={desc => {
-            onDesviacion?.(detalle.id, desviacionModal.error.key, desviacionModal.error.label, desviacionModal.valorIngresado, desviacionModal.error.message, desc)
+            if (!onDesviacion) return Promise.resolve({ estado: false, mensaje: 'No se pudo registrar la desviación' })
+            return onDesviacion(detalle.id, desviacionModal.error.key, desviacionModal.error.label, desviacionModal.valorIngresado, desviacionModal.error.message, desc)
           }}
           onClose={() => setDesviacionModal(null)}
         />
@@ -1758,6 +1809,9 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const [liberarModal, setLiberarModal] = useState(false)
   const [derogTarget, setDerogTarget] = useState<{ firmaKey: string; detalleId: number; firmaInfo: FirmaInfo; texto: string; grupo: string } | null>(null)
   const [cerrarDesvTarget, setCerrarDesvTarget] = useState<Desviacion | null>(null)
+  // Si falla el guardado de un campo del formulario, antes solo quedaba un console.error — el
+  // operario seguía viendo su valor en pantalla sin saber que nunca llegó a persistirse.
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const brFinalizado = detalleStruct.length > 0 && detalleStruct.every(d => {
     const fc = getFirmasDeEstrategia(d)
@@ -1793,14 +1847,23 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
     if (!readonly) {
       batchRecordApi.guardarDetalle(idNum, detalleId, JSON.stringify(next), labels)
         .then(() => setAuditVersion(v => v + 1))
-        .catch(err => console.error('No se pudo guardar el formulario', err))
+        .catch(err => {
+          const nombreDetalle = detalleStruct.find(d => d.id === detalleId)?.descripcion ?? `Detalle ${detalleId}`
+          setSaveError(`No se pudo guardar "${nombreDetalle}": ${err instanceof Error ? err.message : 'error desconocido'}`)
+        })
     }
   }
 
   const handleDesviacion = async (detalleId: number, campo: string, labelCampo: string, valorIngresado: string, limiteInfo: string, descripcion: string) => {
-    await desviacionesApi.crear({ idBatchRecord: idNum, idDetalle: detalleId, campo, labelCampo, valorIngresado, limiteInfo, descripcion })
+    try {
+      await desviacionesApi.crear({ idBatchRecord: idNum, idDetalle: detalleId, campo, labelCampo, valorIngresado, limiteInfo, descripcion })
+    } catch (err) {
+      return { estado: false, mensaje: err instanceof Error ? err.message : 'No se pudo registrar la desviación' }
+    }
     const desvs = await desviacionesApi.listar(idNum)
     setDesviaciones(desvs)
+    setAuditVersion(v => v + 1)
+    return { estado: true, mensaje: 'Desviación registrada' }
   }
 
   const handleCerrarDesviacion = async (login: string, pin: string, observacionCierre: string) => {
@@ -2695,6 +2758,18 @@ ${procsSections}
           onConfirm={handleCerrarDesviacion}
           onClose={() => setCerrarDesvTarget(null)}
         />
+      )}
+
+      {saveError && (
+        <div style={{ position: 'fixed', bottom: 24, right: 24, background: '#991B1B', color: '#fff', padding: '10px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 4px 24px rgba(0,0,0,.18)', zIndex: 9999, maxWidth: 420 }}>
+          <i className="fa fa-exclamation-circle" style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{saveError}</span>
+          <button
+            onClick={() => setSaveError(null)}
+            style={{ background: 'rgba(255,255,255,.15)', border: 'none', color: '#fff', borderRadius: 6, width: 22, height: 22, cursor: 'pointer', fontSize: 14, flexShrink: 0, display: 'grid', placeItems: 'center' }}
+            aria-label="Cerrar aviso"
+          >×</button>
+        </div>
       )}
     </>
   )
