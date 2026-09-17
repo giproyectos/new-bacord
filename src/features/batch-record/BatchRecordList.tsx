@@ -86,9 +86,20 @@ export function BatchRecordList() {
   const clearFilters = () => { setSearch(''); setEstadoFilter(''); setFechaDesde(''); setFechaHasta(''); setUsuarioFilter('') }
 
   const toggleSelect    = (id: number, e: React.MouseEvent) => { e.stopPropagation(); setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n }) }
-  const toggleSelectAll = () => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(r => r.idBatchRecord)))
-  const allSelected     = filtered.length > 0 && selected.size === filtered.length
-  const someSelected    = selected.size > 0 && !allSelected
+  // Comparar tamaños (selected.size === filtered.length) en vez de la membresía real deja el
+  // checkbox de cabecera en un estado engañoso apenas cambian los filtros: dos conjuntos del
+  // mismo tamaño pero con registros distintos igual contaban como "todo seleccionado". Acá se
+  // compara contra los IDs de lo que está realmente visible, y el toggle solo afecta esos IDs —
+  // una selección hecha antes de filtrar, fuera de la vista actual, no se pierde sin querer.
+  const filteredIds     = filtered.map(r => r.idBatchRecord)
+  const allSelected     = filteredIds.length > 0 && filteredIds.every(id => selected.has(id))
+  const someSelected    = !allSelected && filteredIds.some(id => selected.has(id))
+  const toggleSelectAll = () => setSelected(prev => {
+    const next = new Set(prev)
+    if (allSelected) filteredIds.forEach(id => next.delete(id))
+    else filteredIds.forEach(id => next.add(id))
+    return next
+  })
 
   // ── Generador de paquete de auditoría multi-lote ──────────────────────────
   const [packageBusy, setPackageBusy] = useState(false)
@@ -148,6 +159,12 @@ export function BatchRecordList() {
     const openDesv    = totalDesv.filter(d => d.estado === 'abierta')
     const relevantAudit = [...auditMap.values()].flat().sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
+    // Este HTML se escribe directo a una ventana nueva con document.write() — cualquier campo de
+    // texto libre (motivo de cancelación, descripción de una desviación, nombre de usuario, valor
+    // de un campo del formulario) viaja sin pasar por React, así que hay que escapar a mano igual
+    // que ya hace handlePrint() en EditarBatchRecord.tsx para el PDF de un solo BR.
+    const esc = (s: string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+
     const css = `
       @page { margin: 20mm 18mm; }
       * { box-sizing: border-box; }
@@ -195,9 +212,9 @@ export function BatchRecordList() {
       const col = ESTADO_COLOR[br.idEstado] ?? '#374151'
       return `<tr>
         <td><strong>BR-${br.idBatchRecord}</strong></td>
-        <td>${o?.descripcionMaterial ?? '—'}</td>
-        <td style="font-family:monospace">${o?.loteLogistico ?? '—'}</td>
-        <td style="font-family:monospace">${o?.numeroOrdenProceso ?? '—'}</td>
+        <td>${esc(o?.descripcionMaterial ?? '—')}</td>
+        <td style="font-family:monospace">${esc(o?.loteLogistico ?? '—')}</td>
+        <td style="font-family:monospace">${esc(o?.numeroOrdenProceso ?? '—')}</td>
         <td><span class="badge" style="background:${bg};color:${col};border-color:${col}20">${est}</span></td>
         <td style="text-align:right">${br.porcentajeAvance ?? 0}%</td>
       </tr>`
@@ -213,8 +230,8 @@ export function BatchRecordList() {
       ? '<p style="color:#059669;font-weight:600">✓ Sin desviaciones abiertas en los lotes seleccionados.</p>'
       : openDesv.map(d => `
           <div class="desv-abierta">
-            <strong>BR-${d.idBatchRecord} · ${d.campo}</strong> — ${d.labelCampo}<br/>
-            <span style="color:#92400E;font-size:11px">Valor ingresado: <strong>${d.valorIngresado}</strong> · ${d.descripcion}</span>
+            <strong>BR-${d.idBatchRecord} · ${esc(d.campo)}</strong> — ${esc(d.labelCampo)}<br/>
+            <span style="color:#92400E;font-size:11px">Valor ingresado: <strong>${esc(d.valorIngresado)}</strong> · ${esc(d.descripcion)}</span>
           </div>`).join('')
 
     // ── Tabla comparativa ──────────────────────────────────────────────────
@@ -227,9 +244,9 @@ export function BatchRecordList() {
       const bg  = ESTADO_BG[br.idEstado] ?? '#F1F5F9'
       return `<tr>
         <td><strong style="font-family:monospace">BR-${br.idBatchRecord}</strong></td>
-        <td>${o?.descripcionMaterial ?? '—'}<br/><span style="color:#94A3B8;font-size:10px;font-family:monospace">${o?.codigoMaterial ?? ''}</span></td>
-        <td style="font-family:monospace">${o?.loteLogistico ?? '—'}</td>
-        <td style="text-align:right">${o?.cantidadOrden?.toLocaleString('es-CO') ?? '—'} ${o?.unidadMedida ?? ''}</td>
+        <td>${esc(o?.descripcionMaterial ?? '—')}<br/><span style="color:#94A3B8;font-size:10px;font-family:monospace">${esc(o?.codigoMaterial ?? '')}</span></td>
+        <td style="font-family:monospace">${esc(o?.loteLogistico ?? '—')}</td>
+        <td style="text-align:right">${o?.cantidadOrden?.toLocaleString('es-CO') ?? '—'} ${esc(o?.unidadMedida ?? '')}</td>
         <td><span class="badge" style="background:${bg};color:${col};border-color:${col}20">${ESTADO_LABEL[br.idEstado] ?? '—'}</span></td>
         <td style="text-align:right"><strong>${br.porcentajeAvance ?? 0}%</strong></td>
         <td style="text-align:center">${desv.filter(d=>d.estado==='abierta').length > 0 ? `<span style="color:#D97706;font-weight:700">${desv.filter(d=>d.estado==='abierta').length} abierta(s)</span>` : `<span style="color:#059669">${desv.length === 0 ? '—' : desv.length+' cerrada(s)'}</span>`}</td>
@@ -250,10 +267,10 @@ export function BatchRecordList() {
       const firmaRows = firmados.map(f => {
         const secLabel = detalleLabelMap.get(f.idDetalle) ?? f.firma.descripcion
         return `<tr>
-          <td style="font-family:monospace;font-size:10px">${f.firma.codigo}</td>
-          <td>${secLabel}</td>
-          <td><strong>${f.usuario.nombres} ${f.usuario.apellidos}</strong><br/><span style="color:#94A3B8;font-family:monospace;font-size:10px">${f.usuario.login}</span></td>
-          <td>${f.firma.grupo.nombre}</td>
+          <td style="font-family:monospace;font-size:10px">${esc(f.firma.codigo)}</td>
+          <td>${esc(secLabel)}</td>
+          <td><strong>${esc(f.usuario.nombres)} ${esc(f.usuario.apellidos)}</strong><br/><span style="color:#94A3B8;font-family:monospace;font-size:10px">${esc(f.usuario.login)}</span></td>
+          <td>${esc(f.firma.grupo.nombre)}</td>
           <td style="font-family:monospace;font-size:10px">${new Date(f.firmadoEn).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}</td>
         </tr>`
       }).join('')
@@ -264,14 +281,14 @@ export function BatchRecordList() {
         : desv.map(d => `
             <div class="${d.estado === 'abierta' ? 'desv-abierta' : 'desv-cerrada'}">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <strong>${d.campo} · ${d.labelCampo}</strong>
+                <strong>${esc(d.campo)} · ${esc(d.labelCampo)}</strong>
                 <span class="badge" style="background:${d.estado==='abierta'?'#FEF3C7':'#D1FAE5'};color:${d.estado==='abierta'?'#92400E':'#065F46'};border-color:${d.estado==='abierta'?'#FDE68A':'#6EE7B7'}">
                   ${d.estado.toUpperCase()}
                 </span>
               </div>
-              <div style="font-size:11px;color:#374151">${d.descripcion}</div>
+              <div style="font-size:11px;color:#374151">${esc(d.descripcion)}</div>
               <div style="font-size:10px;color:#94A3B8;margin-top:4px">
-                Valor: <strong>${d.valorIngresado}</strong> · ${d.limiteInfo} · ${d.usuarioReporta.nombres} ${d.usuarioReporta.apellidos} · ${d.fechaHora}
+                Valor: <strong>${esc(d.valorIngresado)}</strong> · ${esc(d.limiteInfo)} · ${esc(d.usuarioReporta.nombres)} ${esc(d.usuarioReporta.apellidos)} · ${esc(d.fechaHora)}
               </div>
             </div>`).join('')
 
@@ -283,16 +300,16 @@ export function BatchRecordList() {
             const d    = new Date(e.timestamp)
             const fec  = d.toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'numeric'})
             const hor  = d.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-            const sec  = e.descripcionEntidad
+            const sec  = esc(e.descripcionEntidad)
             const det  = e.cambios && e.cambios.length > 0
-              ? e.cambios.map(c => `<span style="font-size:10px">${c.etiqueta}: <span class="val-ant">${c.valorAnterior||'—'}</span> → <span class="val-nv">${c.valorNuevo||'—'}</span></span>`).join('<br/>')
-              : (e.motivo ? `<em style="color:#92400E">${e.motivo}</em>` : '—')
+              ? e.cambios.map(c => `<span style="font-size:10px">${esc(c.etiqueta)}: <span class="val-ant">${esc(c.valorAnterior||'—')}</span> → <span class="val-nv">${esc(c.valorNuevo||'—')}</span></span>`).join('<br/>')
+              : (e.motivo ? `<em style="color:#92400E">${esc(e.motivo)}</em>` : '—')
             return `<tr>
               <td style="font-family:monospace;font-size:10px;white-space:nowrap">${hor}<br/>${fec}</td>
               <td><span class="badge" style="background:${cfg.bg};color:${cfg.color};border-color:${cfg.border}">${cfg.label}</span></td>
               <td style="font-size:10.5px">${sec}</td>
-              <td><strong style="font-size:11px">${e.nombreUsuario}</strong><br/><span style="font-family:monospace;font-size:9.5px;color:#94A3B8">${e.loginUsuario}</span></td>
-              <td style="font-size:10.5px;color:#64748B">${e.cargo}</td>
+              <td><strong style="font-size:11px">${esc(e.nombreUsuario)}</strong><br/><span style="font-family:monospace;font-size:9.5px;color:#94A3B8">${esc(e.loginUsuario)}</span></td>
+              <td style="font-size:10.5px;color:#64748B">${esc(e.cargo)}</td>
               <td style="font-size:10.5px">${det}</td>
             </tr>`
           }).join('')
@@ -305,7 +322,7 @@ export function BatchRecordList() {
           <div class="br-section-header">
             <div>
               <div class="br-section-id">BR-${br.idBatchRecord}</div>
-              <div class="br-section-sub">${o?.descripcionMaterial ?? '—'} · Lote ${o?.loteLogistico ?? '—'}</div>
+              <div class="br-section-sub">${esc(o?.descripcionMaterial ?? '—')} · Lote ${esc(o?.loteLogistico ?? '—')}</div>
             </div>
             <div style="text-align:right">
               <span class="badge" style="background:${estBg};color:${estCol};border-color:${estCol}20;font-size:11px;padding:4px 14px">${ESTADO_LABEL[br.idEstado] ?? '—'}</span>
@@ -319,19 +336,19 @@ export function BatchRecordList() {
             <table>
               <tr><th>Producto</th><th>Código Material</th><th>Lote No.</th><th>Orden de Proceso</th><th>Tamaño de Lote</th></tr>
               <tr>
-                <td>${o?.descripcionMaterial ?? '—'}</td>
-                <td style="font-family:monospace">${o?.codigoMaterial ?? '—'}</td>
-                <td style="font-family:monospace">${o?.loteLogistico ?? '—'}</td>
-                <td style="font-family:monospace">${o?.numeroOrdenProceso ?? '—'}</td>
-                <td>${o?.cantidadOrden?.toLocaleString('es-CO') ?? '—'} ${o?.unidadMedida ?? ''}</td>
+                <td>${esc(o?.descripcionMaterial ?? '—')}</td>
+                <td style="font-family:monospace">${esc(o?.codigoMaterial ?? '—')}</td>
+                <td style="font-family:monospace">${esc(o?.loteLogistico ?? '—')}</td>
+                <td style="font-family:monospace">${esc(o?.numeroOrdenProceso ?? '—')}</td>
+                <td>${o?.cantidadOrden?.toLocaleString('es-CO') ?? '—'} ${esc(o?.unidadMedida ?? '')}</td>
               </tr>
             </table>
             <table>
               <tr><th>Centro / Planta</th><th>Fecha Fabricación</th><th>Fecha Caducidad</th><th>Avance</th><th>Estado</th></tr>
               <tr>
-                <td>${o?.centro ?? '—'}</td>
-                <td>${o?.fechaFabricacion ?? '—'}</td>
-                <td>${o?.fechaCaducidad ?? '—'}</td>
+                <td>${esc(o?.centro ?? '—')}</td>
+                <td>${esc(o?.fechaFabricacion ?? '—')}</td>
+                <td>${esc(o?.fechaCaducidad ?? '—')}</td>
                 <td><strong>${br.porcentajeAvance ?? 0}%</strong></td>
                 <td><span class="badge" style="background:${estBg};color:${estCol};border-color:${estCol}20">${ESTADO_LABEL[br.idEstado]??'—'}</span></td>
               </tr>
@@ -367,19 +384,24 @@ export function BatchRecordList() {
     }).join('')
 
     // ── Registro de generación del paquete ─────────────────────────────────
-    registrar({
-      entidad: 'BatchRecord',
-      idEntidad: selectedBRs[0].idBatchRecord,
-      descripcionEntidad: `Paquete Multi-Lote ${pkgNum}`,
-      accion: 'MODIFICAR',
-      modulo: 'BatchRecordList',
-      cambios: selectedBRs.map(br => ({
-        campo: `BR-${br.idBatchRecord}`,
-        etiqueta: `Lote BR-${br.idBatchRecord}`,
-        valorAnterior: '',
-        valorNuevo: `Incluido en paquete ${pkgNum}`,
-      })),
-      motivo: `Generación de paquete de auditoría multi-lote ${pkgNum} — ${selectedBRs.length} BR(s) incluidos`,
+    // Un evento por cada BR incluido (no solo el primero) — el panel de auditoría embebido de
+    // cada Batch Record filtra por su propio idEntidad, así que registrar todo bajo un único BR
+    // dejaba a los demás lotes del paquete sin ningún rastro de que se generó este documento.
+    selectedBRs.forEach(br => {
+      registrar({
+        entidad: 'BatchRecord',
+        idEntidad: br.idBatchRecord,
+        descripcionEntidad: `Paquete Multi-Lote ${pkgNum}`,
+        accion: 'MODIFICAR',
+        modulo: 'BatchRecordList',
+        cambios: selectedBRs.map(b => ({
+          campo: `BR-${b.idBatchRecord}`,
+          etiqueta: `Lote BR-${b.idBatchRecord}`,
+          valorAnterior: '',
+          valorNuevo: `Incluido en paquete ${pkgNum}`,
+        })),
+        motivo: `Generación de paquete de auditoría multi-lote ${pkgNum} — ${selectedBRs.length} BR(s) incluidos`,
+      })
     })
 
     const html = `<!DOCTYPE html>
@@ -390,7 +412,7 @@ export function BatchRecordList() {
 
 <!-- ══ PORTADA ══ -->
 <div class="pg-header">
-  <div style="font-size:10px;color:rgba(255,255,255,.6);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">${productosPortada}</div>
+  <div style="font-size:10px;color:rgba(255,255,255,.6);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">${esc(productosPortada)}</div>
   <h1 style="color:#fff;font-size:26px;margin:0 0 4px">Paquete de Auditoría Multi-Lote</h1>
   <div class="pg-header-sub">${pkgNum} &nbsp;·&nbsp; Documento GMP Confidencial &nbsp;·&nbsp; Generado: ${nowFmt}</div>
 </div>
@@ -398,8 +420,8 @@ export function BatchRecordList() {
 <div class="meta-grid">
   <div class="meta-box">
     <div class="meta-box-label">Generado por</div>
-    <div class="meta-box-value" style="font-size:13px">${genUser}</div>
-    <div style="font-size:10px;color:#94A3B8;margin-top:2px">${genCargo} · ${authUser?.login ?? ''}</div>
+    <div class="meta-box-value" style="font-size:13px">${esc(genUser)}</div>
+    <div style="font-size:10px;color:#94A3B8;margin-top:2px">${esc(genCargo)} · ${esc(authUser?.login ?? '')}</div>
   </div>
   <div class="meta-box">
     <div class="meta-box-label">Fecha y Hora</div>
@@ -489,7 +511,7 @@ ${brSections}
     <table style="margin:0">
       <tr><th style="width:200px">Campo</th><th>Valor</th></tr>
       <tr><td>Número de paquete</td><td><strong style="font-family:monospace">${pkgNum}</strong></td></tr>
-      <tr><td>Generado por</td><td>${genUser} (${authUser?.login ?? '—'}) · ${genCargo}</td></tr>
+      <tr><td>Generado por</td><td>${esc(genUser)} (${esc(authUser?.login ?? '—')}) · ${esc(genCargo)}</td></tr>
       <tr><td>Fecha y hora de generación</td><td>${nowFmt}</td></tr>
       <tr><td>BRs incluidos</td><td>${selectedBRs.map(b=>`BR-${b.idBatchRecord}`).join(', ')}</td></tr>
       <tr><td>Total eventos de auditoría</td><td>${relevantAudit.length}</td></tr>
