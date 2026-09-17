@@ -100,6 +100,28 @@ recetasMaestrasRouter.put(
     const anterior = await prisma.recetaMaestra.findUnique({ where: { idRecetaMaestra } })
     if (!anterior) throw new NotFoundError('Receta Maestra no encontrada')
 
+    // El producto no se puede cambiar nunca, ni siquiera antes de tener Batch Records — define de
+    // qué receta se trata. El frontend ya deshabilita ese campo al editar, pero eso no protege
+    // contra una llamada directa a la API.
+    if (parsed.data.idMaterial !== undefined && parsed.data.idMaterial !== anterior.idMaterial) {
+      throw new ConflictError('El producto no se puede cambiar una vez creada la receta')
+    }
+
+    // Mismo criterio que PUT /:id/estructura: una vez que la receta tiene Batch Records, cambiar
+    // su código, versión, descripción o centro alteraría retroactivamente lo que ya muestra un
+    // Batch Record en curso o liberado (EditarBatchRecord.tsx consulta la receta en vivo, nunca
+    // guarda una foto al crearse). La vía correcta es versionarla con "Copiar".
+    const CAMPOS_IDENTIDAD = ['codigo', 'descripcion', 'version', 'idCentro'] as const
+    const cambiaIdentidad = CAMPOS_IDENTIDAD.some(
+      (campo) => parsed.data[campo] !== undefined && parsed.data[campo] !== anterior[campo]
+    )
+    if (cambiaIdentidad) {
+      const tieneBatchRecords = await prisma.batchRecord.findFirst({ where: { idRecetaMaestra } })
+      if (tieneBatchRecords) {
+        throw new ConflictError('Esta receta ya tiene Batch Records asociados — no se puede modificar. Cree una nueva versión con "Copiar".')
+      }
+    }
+
     const receta = await prisma.$transaction(async (tx) => {
       const actualizada = await tx.recetaMaestra.update({
         where: { idRecetaMaestra },
@@ -200,12 +222,13 @@ recetasMaestrasRouter.put(
 
 const ESTADO_LABEL: Record<number, string> = { 1: 'Activo', 2: 'Inactivo', 3: 'Aprobado', 4: 'Creación', 5: 'Revisión', 6: 'Rechazado' }
 // Mismo flujo que expone el frontend (RecetaMaestraList.tsx, `siguienteEstado`): Creación → Revisión
-// → Aprobado → Activo → Inactivo. Sin esto, el endpoint aceptaba cualquier entero — una llamada
-// directa a la API podía saltarse la revisión/aprobación y activar la receta de un salto, o guardar
-// un idEstado que ni el propio ESTADO_LABEL reconoce.
+// → Aprobado → Activo → Inactivo, con la salida de Revisión de vuelta a Creación (rechazo). Sin
+// esto, el endpoint aceptaba cualquier entero — una llamada directa a la API podía saltarse la
+// revisión/aprobación y activar la receta de un salto, o guardar un idEstado que ni el propio
+// ESTADO_LABEL reconoce.
 const TRANSICIONES_VALIDAS: Record<number, number[]> = {
   4: [5], // Creación → Revisión
-  5: [3], // Revisión → Aprobado
+  5: [3, 4], // Revisión → Aprobado, o rechazada de vuelta a Creación
   3: [1], // Aprobado → Activo
   1: [2], // Activo → Inactivo
 }
@@ -226,6 +249,11 @@ recetasMaestrasRouter.post(
       const estadoActual = ESTADO_LABEL[anterior.idEstado] ?? String(anterior.idEstado)
       const estadoPedido = ESTADO_LABEL[parsed.data.idEstado] ?? String(parsed.data.idEstado)
       throw new ConflictError(`No se puede pasar de "${estadoActual}" a "${estadoPedido}"`)
+    }
+    // Rechazar una receta en Revisión es la única transición negativa — exige que quede
+    // documentado por qué, igual que derogar una firma o cancelar un lote.
+    if (anterior.idEstado === 5 && parsed.data.idEstado === 4 && !parsed.data.motivo?.trim()) {
+      throw new ValidationError('Debe indicar el motivo del rechazo')
     }
 
     const receta = await prisma.$transaction(async (tx) => {

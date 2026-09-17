@@ -7,14 +7,16 @@ import { materialesApi } from '@/api/materiales'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
 import { usePuedeEditar } from '@/hooks/usePermisos'
+import { RECETA_ESTADO_LABEL } from '@/constants/recetaMaestra'
 import type { RecetaMaestra } from '@/types'
 
-const estadoLabel: Record<number, string> = { 1: 'Activo', 2: 'Inactivo', 3: 'Aprobado', 4: 'Creación', 5: 'Revisión', 6: 'Rechazado' }
-const siguienteEstado: Record<number, { id: number; label: string }> = {
-  4: { id: 5, label: 'Enviar a Revisión' },
-  5: { id: 3, label: 'Aprobar' },
-  3: { id: 1, label: 'Activar' },
-  1: { id: 2, label: 'Inactivar' },
+// Revisión puede resolverse en dos sentidos — Aprobar o Rechazar (de vuelta a Creación) — por
+// eso cada estado mapea a una lista, no a una única transición siguiente.
+const siguienteEstado: Record<number, { id: number; label: string; requiereMotivo?: boolean; peligro?: boolean }[]> = {
+  4: [{ id: 5, label: 'Enviar a Revisión' }],
+  5: [{ id: 3, label: 'Aprobar' }, { id: 4, label: 'Rechazar', requiereMotivo: true, peligro: true }],
+  3: [{ id: 1, label: 'Activar' }],
+  1: [{ id: 2, label: 'Inactivar' }],
 }
 
 const EMPTY_FORM = { codigo: '', descripcion: '', version: '', idCentro: '', idMaterial: '' }
@@ -24,11 +26,15 @@ export function RecetaMaestraList() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [modalCrear, setModalCrear] = useState(false)
-  const [modalEstado, setModalEstado] = useState<{ receta: RecetaMaestra; sig: { id: number; label: string } } | null>(null)
+  const [modalEstado, setModalEstado] = useState<{ receta: RecetaMaestra; sig: { id: number; label: string; requiereMotivo?: boolean; peligro?: boolean } } | null>(null)
   const [motivo, setMotivo] = useState('')
   const [form, setForm] = useState(EMPTY_FORM)
   const [editando, setEditando] = useState<RecetaMaestra | null>(null)
   const [error, setError] = useState('')
+  const [modalCopiar, setModalCopiar] = useState<RecetaMaestra | null>(null)
+  const [copiarCodigo, setCopiarCodigo] = useState('')
+  const [copiarError, setCopiarError] = useState('')
+  const [estadoError, setEstadoError] = useState('')
 
   const { data: recetas = [], isLoading } = useQuery({
     queryKey: ['recetas-maestras'],
@@ -40,7 +46,24 @@ export function RecetaMaestraList() {
   const cambiarEstado = useMutation({
     mutationFn: ({ id, idEstado, motivo }: { id: number; idEstado: number; motivo: string }) =>
       recetaMaestraApi.cambiarEstado(id, idEstado, motivo),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['recetas-maestras'] }); setModalEstado(null); setMotivo('') },
+    onSuccess: (res) => {
+      if (!res.estado) { setEstadoError(res.mensaje); return }
+      queryClient.invalidateQueries({ queryKey: ['recetas-maestras'] }); setModalEstado(null); setMotivo(''); setEstadoError('')
+    },
+    onError: (err) => setEstadoError(err instanceof Error ? err.message : 'No se pudo cambiar el estado'),
+  })
+
+  // Única vía para modificar código/versión/centro/producto de una receta que ya tiene Batch
+  // Records asociados (el backend lo exige — ver ConflictError en PUT /:id) — antes existía
+  // completa en el backend pero no había ningún botón en la interfaz para llegar a ella.
+  const copiarReceta = useMutation({
+    mutationFn: ({ id, codigo }: { id: number; codigo: string }) => recetaMaestraApi.copiar(id, codigo),
+    onSuccess: (res) => {
+      if (!res.estado) { setCopiarError(res.mensaje); return }
+      queryClient.invalidateQueries({ queryKey: ['recetas-maestras'] })
+      setModalCopiar(null); setCopiarCodigo(''); setCopiarError('')
+    },
+    onError: (err) => setCopiarError(err instanceof Error ? err.message : 'No se pudo copiar la receta'),
   })
 
   const centrosActivos = centros.filter(c => c.activo)
@@ -57,8 +80,16 @@ export function RecetaMaestraList() {
     if (!editando && !form.idMaterial) { setError('Seleccione un producto'); return }
 
     const data = { codigo: form.codigo.trim(), descripcion: form.descripcion.trim(), version: form.version.trim(), idCentro: Number(form.idCentro), idMaterial: Number(form.idMaterial) }
-    const res = editando ? await recetaMaestraApi.guardar(editando.idRecetaMaestra, data) : await recetaMaestraApi.crear(data)
-    if (!res.estado) { setError(res.mensaje); return }
+    try {
+      const res = editando ? await recetaMaestraApi.guardar(editando.idRecetaMaestra, data) : await recetaMaestraApi.crear(data)
+      if (!res.estado) { setError(res.mensaje); return }
+    } catch (err) {
+      // Ej: 409 "Esta receta ya tiene Batch Records asociados..." — el backend rechaza cambios de
+      // identidad sin lanzar un {estado:false}, así que sin este catch la solicitud fallaba sin
+      // ningún aviso visible en el modal.
+      setError(err instanceof Error ? err.message : 'No se pudo guardar la receta')
+      return
+    }
     setModalCrear(false); setEditando(null)
     queryClient.invalidateQueries({ queryKey: ['recetas-maestras'] })
   }
@@ -68,21 +99,40 @@ export function RecetaMaestraList() {
     { key: 'descripcion', header: 'Descripción' },
     { key: 'version', header: 'Versión', width: '8%' },
     { key: 'centro', header: 'Centro', width: '10%' },
-    { key: 'idEstado', header: 'Estado', width: '10%', render: (r) => estadoLabel[r.idEstado] ?? '—' },
+    { key: 'idEstado', header: 'Estado', width: '10%', render: (r) => RECETA_ESTADO_LABEL[r.idEstado] ?? '—' },
     { key: 'fechaModificacion', header: 'Últ. Modificación', width: '12%' },
     {
-      key: 'acciones', header: '', width: '8%', align: 'center',
+      key: 'acciones', header: '', width: '14%', align: 'center',
       render: (r) => {
-        const sig = siguienteEstado[r.idEstado]
+        const sigs = siguienteEstado[r.idEstado] ?? []
         return (
           <div className="dt-act">
             {puedeEditar && <button className="dt-ab dt-ab-edit" title="Editar datos básicos" onClick={() => openEditar(r)}><i className="fa fa-pencil-alt" /></button>}
             <button className="dt-ab dt-ab-extra" title="Configurar procesos y formularios" onClick={() => navigate(`/recetas-maestras/${r.idRecetaMaestra}/configurar`)} style={{ color: '#7C3AED' }}><i className="fa fa-sitemap" /></button>
-            {puedeEditar && sig && (
-              <button onClick={() => setModalEstado({ receta: r, sig })} style={{ fontSize: 10, padding: '2px 8px', background: 'var(--navy)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: 'var(--f-sans)', whiteSpace: 'nowrap' }}>
-                {sig.label}
+            {puedeEditar && (
+              <button
+                className="dt-ab dt-ab-extra"
+                title="Crear una nueva versión a partir de esta receta"
+                onClick={() => { setModalCopiar(r); setCopiarCodigo(''); setCopiarError('') }}
+                style={{ color: '#0891B2' }}
+              >
+                <i className="fa fa-copy" />
               </button>
             )}
+            {puedeEditar && sigs.map(sig => (
+              <button
+                key={sig.id}
+                onClick={() => { setModalEstado({ receta: r, sig }); setMotivo(''); setEstadoError('') }}
+                style={{
+                  fontSize: 10, padding: '2px 8px', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  fontFamily: 'var(--f-sans)', whiteSpace: 'nowrap',
+                  background: sig.peligro ? '#FEE2E2' : 'var(--navy)',
+                  color: sig.peligro ? '#991B1B' : '#fff',
+                }}
+              >
+                {sig.label}
+              </button>
+            ))}
           </div>
         )
       },
@@ -185,24 +235,70 @@ export function RecetaMaestraList() {
               <p style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 14 }}>
                 <strong>{modalEstado.receta.codigo}</strong> — {modalEstado.receta.descripcion}
               </p>
-              <label className="field-label">Motivo <span style={{ color: 'var(--ink-4)', fontWeight: 400 }}>(opcional)</span></label>
+              <label className="field-label">
+                Motivo {modalEstado.sig.requiereMotivo
+                  ? <span style={{ color: '#DC2626', fontWeight: 400 }}>(requerido)</span>
+                  : <span style={{ color: 'var(--ink-4)', fontWeight: 400 }}>(opcional)</span>}
+              </label>
               <textarea
                 className="field-input"
                 rows={3}
                 style={{ resize: 'none' }}
                 value={motivo}
                 onChange={e => setMotivo(e.target.value)}
-                placeholder="Ingrese el motivo..."
+                placeholder={modalEstado.sig.requiereMotivo ? 'Indique por qué se rechaza esta receta...' : 'Ingrese el motivo...'}
               />
+              {estadoError && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <i className="fa fa-exclamation-circle" /> {estadoError}
+                </div>
+              )}
             </div>
             <div className="modal-footer-bar">
               <button className="btn btn-gray" onClick={() => setModalEstado(null)}>Cancelar</button>
               <button
-                className="btn btn-primary"
-                disabled={cambiarEstado.isPending}
+                className={modalEstado.sig.peligro ? 'btn btn-danger' : 'btn btn-primary'}
+                disabled={cambiarEstado.isPending || (modalEstado.sig.requiereMotivo && !motivo.trim())}
                 onClick={() => cambiarEstado.mutate({ id: modalEstado.receta.idRecetaMaestra, idEstado: modalEstado.sig.id, motivo })}
               >
                 {cambiarEstado.isPending ? 'Guardando...' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Copiar (nueva versión) */}
+      {modalCopiar && (
+        <div className="modal-overlay" onClick={() => setModalCopiar(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-header-bar">Crear nueva versión</div>
+            <div className="modal-body-area">
+              <p style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 14 }}>
+                Copia <strong>{modalCopiar.codigo}</strong> — {modalCopiar.descripcion} (procesos y formularios incluidos) como una receta nueva, en estado Creación. Es la única forma de modificar código, versión, centro o estructura de una receta que ya tiene Batch Records asociados.
+              </p>
+              <label className="field-label">Código de la nueva receta *</label>
+              <input
+                className="field-input"
+                value={copiarCodigo}
+                onChange={e => { setCopiarCodigo(e.target.value); setCopiarError('') }}
+                placeholder="Ej: RM-005-V2"
+                autoFocus
+              />
+              {copiarError && (
+                <div style={{ padding: '8px 12px', background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: '#B91C1C', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <i className="fa fa-exclamation-circle" /> {copiarError}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer-bar">
+              <button className="btn btn-gray" onClick={() => setModalCopiar(null)}><i className="fa fa-undo" /> Cancelar</button>
+              <button
+                className="btn btn-primary"
+                disabled={!copiarCodigo.trim() || copiarReceta.isPending}
+                onClick={() => copiarReceta.mutate({ id: modalCopiar.idRecetaMaestra, codigo: copiarCodigo.trim() })}
+              >
+                {copiarReceta.isPending ? 'Copiando...' : 'Copiar'}
               </button>
             </div>
           </div>

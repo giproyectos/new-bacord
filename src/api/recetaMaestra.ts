@@ -1,7 +1,6 @@
 import { http } from './http'
 import type { RecetaMaestra, BusquedaRecetaMaestra, Resultado } from '@/types'
-
-const ESTADO_LABEL: Record<number, string> = { 1: 'Borrador', 2: 'Aprobada', 3: 'Obsoleta' }
+import { RECETA_ESTADO_LABEL } from '@/constants/recetaMaestra'
 
 interface BackendReceta {
   idRecetaMaestra: number
@@ -30,7 +29,7 @@ function toFrontend(r: BackendReceta): RecetaMaestra {
     idCentro: r.idCentro,
     centro: r.centro?.descripcion ?? '',
     idEstado: r.idEstado,
-    estado: ESTADO_LABEL[r.idEstado] ?? '—',
+    estado: RECETA_ESTADO_LABEL[r.idEstado] ?? '—',
     procesos: r.procesos?.map((p) => p.proceso.descripcion).join(', ') ?? '',
     materiales: r.material?.descripcion ?? '',
     idMateriales: r.idMaterial ? String(r.idMaterial) : '',

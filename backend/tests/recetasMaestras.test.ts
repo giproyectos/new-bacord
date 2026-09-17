@@ -51,6 +51,67 @@ describe('PUT /api/recetas-maestras/:id/estructura — protección contra Batch 
 })
 
 // idEstado: 1 Activo, 2 Inactivo, 3 Aprobado, 4 Creación, 5 Revisión, 6 Rechazado.
+// Mismo criterio que /estructura — cambiar código/versión/descripción/centro después de que la
+// receta tiene Batch Records alteraría retroactivamente lo que ya muestra un lote en curso o
+// liberado (consulta la receta en vivo). El producto no se puede cambiar nunca, con o sin BRs.
+describe('PUT /api/recetas-maestras/:id — protección de identidad', () => {
+  it('rechaza cambiar código/versión/centro si la receta ya tiene un Batch Record asociado', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .put(`/api/recetas-maestras/${esc.recetaMaestra.idRecetaMaestra}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ codigo: 'RM-CAMBIADO' })
+
+    expect(res.status).toBe(409)
+    const actual = await prisma.recetaMaestra.findUniqueOrThrow({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra } })
+    expect(actual.codigo).toBe(esc.recetaMaestra.codigo)
+  })
+
+  it('permite cambiar código/versión/centro de una receta sin Batch Records', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const recetaNueva = await prisma.recetaMaestra.create({
+      data: {
+        codigo: 'RM-SIN-BR-2', descripcion: 'Receta sin uso', version: '1',
+        idCentro: esc.centro.id, idMaterial: esc.material.id,
+        usuarioCreacion: 'seed', usuarioModificacion: 'seed',
+      },
+    })
+
+    const res = await request(app)
+      .put(`/api/recetas-maestras/${recetaNueva.idRecetaMaestra}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ codigo: 'RM-RENOMBRADA' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.datos.codigo).toBe('RM-RENOMBRADA')
+  })
+
+  it('rechaza cambiar el producto (idMaterial) aunque la receta no tenga Batch Records', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const recetaNueva = await prisma.recetaMaestra.create({
+      data: {
+        codigo: 'RM-SIN-BR-3', descripcion: 'Receta sin uso', version: '1',
+        idCentro: esc.centro.id, idMaterial: esc.material.id,
+        usuarioCreacion: 'seed', usuarioModificacion: 'seed',
+      },
+    })
+    const otroMaterial = await prisma.material.create({ data: { codigo: 'M-OTRO', descripcion: 'Otro material' } })
+
+    const res = await request(app)
+      .put(`/api/recetas-maestras/${recetaNueva.idRecetaMaestra}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idMaterial: otroMaterial.id })
+
+    expect(res.status).toBe(409)
+    const actual = await prisma.recetaMaestra.findUniqueOrThrow({ where: { idRecetaMaestra: recetaNueva.idRecetaMaestra } })
+    expect(actual.idMaterial).toBe(esc.material.id)
+  })
+})
+
 describe('POST /api/recetas-maestras — estado inicial', () => {
   it('crea la receta en Creación (4), no en Activo — debe pasar por Revisión y Aprobación', async () => {
     const esc = await crearEscenarioBasico()
@@ -112,5 +173,37 @@ describe('POST /api/recetas-maestras/:id/estado — transiciones válidas', () =
     }
     const actual = await prisma.recetaMaestra.findUniqueOrThrow({ where: { idRecetaMaestra: id } })
     expect(actual.idEstado).toBe(2)
+  })
+
+  it('permite rechazar una receta en Revisión, de vuelta a Creación, con motivo', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const id = esc.recetaMaestra.idRecetaMaestra
+
+    await request(app).post(`/api/recetas-maestras/${id}/estado`).set('Authorization', `Bearer ${token}`).send({ idEstado: 5 })
+    const res = await request(app)
+      .post(`/api/recetas-maestras/${id}/estado`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idEstado: 4, motivo: 'Falta definir la firma de cierre de la última etapa' })
+
+    expect(res.status).toBe(200)
+    const actual = await prisma.recetaMaestra.findUniqueOrThrow({ where: { idRecetaMaestra: id } })
+    expect(actual.idEstado).toBe(4)
+  })
+
+  it('exige un motivo para rechazar una receta en Revisión', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const id = esc.recetaMaestra.idRecetaMaestra
+
+    await request(app).post(`/api/recetas-maestras/${id}/estado`).set('Authorization', `Bearer ${token}`).send({ idEstado: 5 })
+    const res = await request(app)
+      .post(`/api/recetas-maestras/${id}/estado`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idEstado: 4 })
+
+    expect(res.status).toBe(400)
+    const actual = await prisma.recetaMaestra.findUniqueOrThrow({ where: { idRecetaMaestra: id } })
+    expect(actual.idEstado).toBe(5)
   })
 })
