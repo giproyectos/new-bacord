@@ -11,6 +11,33 @@ import { verificarPin } from '../services/pin.js'
 
 export const batchRecordsRouter = Router()
 
+// Las únicas entidades de auditoría cuyo idEntidad es un idBatchRecord (ver logAudit en este
+// archivo y en desviaciones.ts) — debe coincidir con ENTIDADES_DE_BR en
+// src/features/batch-record/EditarBatchRecord.tsx (frontend), que arma el mismo criterio para
+// el panel de auditoría embebido.
+const ENTIDADES_DE_BR = ['BatchRecord', 'DetalleValores', 'FirmaSeccion', 'FirmaCierre', 'Desviacion']
+
+// `BatchRecord.fechaModificacion` (@updatedAt) solo cambia cuando el propio registro se
+// actualiza — firmar una sección, guardar un campo del formulario o cerrar una etapa no tocan
+// esa columna (solo lo hacen firmar el cierre, liberar, cancelar o derogar). Usarla como "última
+// actividad" hace que un lote con trabajo diario real (llenando formularios, cerrando etapas)
+// aparezca como "sin actividad" — la última actividad real hay que sacarla del propio audit
+// trail, que sí se registra en cada uno de esos pasos.
+async function ultimaActividadPorBatchRecord(ids: number[]): Promise<Map<number, Date>> {
+  if (ids.length === 0) return new Map()
+  const idsStr = ids.map(String)
+  const agregados = await prisma.auditEntry.groupBy({
+    by: ['idEntidad'],
+    where: { idEntidad: { in: idsStr }, entidad: { in: ENTIDADES_DE_BR } },
+    _max: { timestamp: true },
+  })
+  return new Map(
+    agregados
+      .filter((a): a is typeof a & { _max: { timestamp: Date } } => a._max.timestamp !== null)
+      .map((a) => [Number(a.idEntidad), a._max.timestamp])
+  )
+}
+
 batchRecordsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -18,10 +45,15 @@ batchRecordsRouter.get(
     const where: Record<string, unknown> = {}
     if (typeof idEstado === 'string' && idEstado) where.idEstado = Number(idEstado)
     if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
-    res.json(await prisma.batchRecord.findMany({
+    const registros = await prisma.batchRecord.findMany({
       where, orderBy: { fechaCreacion: 'desc' },
       include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
-    }))
+    })
+    const actividad = await ultimaActividadPorBatchRecord(registros.map((r) => r.idBatchRecord))
+    res.json(registros.map((r) => ({
+      ...r,
+      ultimaActividad: actividad.get(r.idBatchRecord) ?? r.fechaModificacion,
+    })))
   })
 )
 

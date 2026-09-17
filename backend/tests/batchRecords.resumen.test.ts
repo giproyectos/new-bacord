@@ -27,6 +27,27 @@ describe('GET /api/batch-records — incluye el material de la Orden de Proceso'
       descripcionMaterial: esc.material.descripcion,
     })
   })
+
+  it('ultimaActividad refleja guardar un campo del formulario, aunque fechaModificacion no cambie', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const antes = await request(app).get('/api/batch-records').set('Authorization', `Bearer ${token}`)
+    const fechaModificacionAntes = antes.body.find((b: { idBatchRecord: number }) => b.idBatchRecord === esc.batchRecord.idBatchRecord).fechaModificacion
+
+    // Guardar un campo del formulario no toca BatchRecord.fechaModificacion — solo queda
+    // registrado en el audit trail (DetalleValores).
+    await request(app)
+      .put(`/api/batch-records/${esc.batchRecord.idBatchRecord}/detalles/${esc.procesos[0].idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: JSON.stringify({ temperatura: '22' }) })
+
+    const despues = await request(app).get('/api/batch-records').set('Authorization', `Bearer ${token}`)
+    const br = despues.body.find((b: { idBatchRecord: number }) => b.idBatchRecord === esc.batchRecord.idBatchRecord)
+
+    expect(br.fechaModificacion).toBe(fechaModificacionAntes)
+    expect(new Date(br.ultimaActividad).getTime()).toBeGreaterThan(new Date(fechaModificacionAntes).getTime())
+  })
 })
 
 describe('GET /api/batch-records/resumen', () => {

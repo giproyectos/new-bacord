@@ -66,7 +66,7 @@ export function DashboardPage() {
 
   // ── Lotes activos ─────────────────────────────────────────────────────────
   const brsActivosBase = batchRecordsActivos.map(br => {
-    const dias = Math.floor((Date.now() - new Date(br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
+    const dias = Math.floor((Date.now() - new Date(br.ultimaActividad ?? br.fechaModificacion ?? br.fechaCreacion).getTime()) / 86400000)
     return {
       id: br.idBatchRecord,
       codigo: `BR-${br.idBatchRecord}`,
