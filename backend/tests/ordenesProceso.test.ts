@@ -92,3 +92,46 @@ describe('POST /api/ordenes-proceso/cargue — la Receta Maestra debe estar Acti
     expect(await prisma.ordenProceso.findUnique({ where: { numeroOrdenProceso: 'OP-CARGUE-MAL' } })).toBeNull()
   })
 })
+
+// El formulario de búsqueda de OrdenProcesoList.tsx llamaba a buscar() sin pasarle ningún filtro
+// — estos parámetros existían en el backend pero nunca llegaban a usarse desde la UI.
+describe('GET /api/ordenes-proceso — filtros', () => {
+  it('filtra por numeroOrden, codigoMaterial e idEstado', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 1 } })
+    await request(app).post('/api/ordenes-proceso').set('Authorization', `Bearer ${token}`)
+      .send(payloadOrden(esc, 'OP-FILTRO-A', esc.recetaMaestra.idRecetaMaestra))
+    await request(app).post('/api/ordenes-proceso').set('Authorization', `Bearer ${token}`)
+      .send(payloadOrden(esc, 'OP-FILTRO-B', esc.recetaMaestra.idRecetaMaestra))
+
+    const porNumero = await request(app).get('/api/ordenes-proceso?numeroOrden=FILTRO-A').set('Authorization', `Bearer ${token}`)
+    expect(porNumero.body.map((o: { numeroOrdenProceso: string }) => o.numeroOrdenProceso)).toEqual(['OP-FILTRO-A'])
+
+    // El fixture ya crea su propia OP (OP-TEST-0001) con el mismo material.
+    const porMaterial = await request(app).get(`/api/ordenes-proceso?codigoMaterial=${esc.material.codigo}`).set('Authorization', `Bearer ${token}`)
+    expect(porMaterial.body.length).toBe(3)
+
+    const porEstado = await request(app).get('/api/ordenes-proceso?idEstado=2').set('Authorization', `Bearer ${token}`)
+    expect(porEstado.body.length).toBe(0) // ambas quedan en 1 (Pendiente), ninguna tiene Fórmula de Control todavía
+  })
+
+  it('filtra por rango de fecha de fabricación', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 1 } })
+    const vieja = payloadOrden(esc, 'OP-FAB-VIEJA', esc.recetaMaestra.idRecetaMaestra)
+    vieja.fechaFabricacion = new Date('2020-01-01').toISOString()
+    const reciente = payloadOrden(esc, 'OP-FAB-RECIENTE', esc.recetaMaestra.idRecetaMaestra)
+    reciente.fechaFabricacion = new Date().toISOString()
+    await request(app).post('/api/ordenes-proceso').set('Authorization', `Bearer ${token}`).send(vieja)
+    await request(app).post('/api/ordenes-proceso').set('Authorization', `Bearer ${token}`).send(reciente)
+
+    const res = await request(app)
+      .get(`/api/ordenes-proceso?fechaFabricacionDesde=${new Date(Date.now() - 86400000).toISOString().slice(0, 10)}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    // El fixture ya crea su propia OP (OP-TEST-0001), fabricada "hoy" igual que OP-FAB-RECIENTE.
+    expect(res.body.map((o: { numeroOrdenProceso: string }) => o.numeroOrdenProceso).sort()).toEqual(['OP-FAB-RECIENTE', 'OP-TEST-0001'])
+  })
+})

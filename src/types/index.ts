@@ -112,4 +112,7 @@ export interface PreLlenadoBR {
 }
 export interface BusquedaBatchRecord { idEstado?: number; idCentro?: number }
 export interface BusquedaRecetaMaestra { codigo?: string; descripcion?: string; idEstado?: number }
-export interface BusquedaOrdenProceso { numeroOrden?: string; codigoMaterial?: string; idEstado?: number }
+export interface BusquedaOrdenProceso {
+  numeroOrden?: string; codigoMaterial?: string; idEstado?: number
+  fechaFabricacionDesde?: string; fechaFabricacionHasta?: string
+}
