@@ -28,6 +28,7 @@ export function FormulaControlDetalle() {
   const [accion, setAccion] = useState<'enviar' | 'cancelar' | null>(null)
   const [procesando, setProcesando] = useState(false)
   const [motivoCancelar, setMotivoCancelar] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!id) return
@@ -50,6 +51,7 @@ export function FormulaControlDetalle() {
     if (!fc || !accion) return
     if (accion === 'cancelar' && !motivoCancelar.trim()) return
     setProcesando(true)
+    setError('')
     try {
       if (accion === 'enviar') {
         const br = await formulaControlApi.enviar(fc.idFormulaControl)
@@ -58,10 +60,18 @@ export function FormulaControlDetalle() {
         await formulaControlApi.cancelar(fc.idFormulaControl, motivoCancelar.trim())
         navigate('/formulas-control')
       }
-    } finally {
-      setProcesando(false)
+      // Solo se limpia al confirmar con éxito — en caso de error el modal se queda abierto,
+      // con el motivo ya escrito, mostrando qué falló (ver catch).
       setAccion(null)
       setMotivoCancelar('')
+    } catch (err) {
+      // Antes no había ningún catch: si el backend rechazaba la solicitud (ej. la FC ya fue
+      // enviada o cancelada por otra persona mientras el modal estaba abierto), la promesa se
+      // rechazaba sin manejo — el modal se cerraba igual (por el finally) pero sin mostrar
+      // ningún error ni navegar a ningún lado, dejando al usuario sin saber qué pasó.
+      setError(err instanceof Error ? err.message : 'No se pudo completar la acción')
+    } finally {
+      setProcesando(false)
     }
   }
 
@@ -123,13 +133,13 @@ export function FormulaControlDetalle() {
           </div>
           {activa && puedeEditar && (
             <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-              <button onClick={() => setAccion('cancelar')}
+              <button onClick={() => { setAccion('cancelar'); setError('') }}
                 style={{ background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.4)',
                   borderRadius: 8, padding: '8px 16px', color: '#FCA5A5', fontSize: 12.5,
                   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <i className="fa fa-times-circle" /> Cancelar FC
               </button>
-              <button onClick={() => setAccion('enviar')}
+              <button onClick={() => { setAccion('enviar'); setError('') }}
                 style={{ background: '#2D5D4A', border: '1px solid #1E4535',
                   borderRadius: 8, padding: '8px 18px', color: '#fff', fontSize: 12.5,
                   cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -258,7 +268,7 @@ export function FormulaControlDetalle() {
       {accion && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(10,21,48,.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={() => { if (!procesando) { setAccion(null); setMotivoCancelar('') } }}>
+          onClick={() => { if (!procesando) { setAccion(null); setMotivoCancelar(''); setError('') } }}>
           <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 8px 40px rgba(10,21,48,.18)',
             width: '100%', maxWidth: 440 }} onClick={e => e.stopPropagation()}>
             <div style={{ padding: '18px 24px', borderBottom: '1px solid rgba(10,21,48,.08)',
@@ -266,7 +276,7 @@ export function FormulaControlDetalle() {
               <span>
                 {accion === 'enviar' ? '¿Enviar a Producción?' : '¿Cancelar Fórmula?'}
               </span>
-              <button onClick={() => { setAccion(null); setMotivoCancelar('') }} disabled={procesando}
+              <button onClick={() => { setAccion(null); setMotivoCancelar(''); setError('') }} disabled={procesando}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#94A3B8' }}>×</button>
             </div>
             <div style={{ padding: '18px 24px', fontSize: 13.5, color: '#475569', lineHeight: 1.6 }}>
@@ -292,10 +302,17 @@ export function FormulaControlDetalle() {
                   />
                 </>
               )}
+              {error && (
+                <div style={{ marginTop: 14, padding: '10px 12px', background: '#FEF2F2',
+                  border: '1.5px solid #FECACA', borderRadius: 8, color: '#B91C1C', fontSize: 12.5 }}>
+                  <i className="fa fa-exclamation-triangle" style={{ marginRight: 6 }} />
+                  {error}
+                </div>
+              )}
             </div>
             <div style={{ padding: '14px 24px', borderTop: '1px solid rgba(10,21,48,.08)',
               display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn btn-gray" onClick={() => { setAccion(null); setMotivoCancelar('') }} disabled={procesando}>
+              <button className="btn btn-gray" onClick={() => { setAccion(null); setMotivoCancelar(''); setError('') }} disabled={procesando}>
                 <i className="fa fa-undo" /> Cancelar
               </button>
               <button
