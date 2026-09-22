@@ -19,7 +19,10 @@ interface Props<T> {
   canCreate?: boolean
   /** false esconde los botones de editar/eliminar por fila (para usuarios con permiso de solo lectura). */
   canEdit?: boolean
-  onSave?: (values: Record<string, string>, isEdit: boolean) => void
+  /** `row` es la fila original que se abrió para editar (`undefined` al crear) — úsalo para ubicar
+   *  el registro a actualizar en vez de rebuscarlo en `data` por un campo del formulario (ese campo
+   *  puede haber cambiado de valor en el propio formulario que se está guardando). */
+  onSave?: (values: Record<string, string>, isEdit: boolean, row?: T) => void
   onDelete?: (row: T) => void
   extraActions?: (row: T) => React.ReactNode
   icon?: string
@@ -82,7 +85,7 @@ export function CatalogPage<T = any>({
       if (f.required && !values[f.key]?.trim()) errs[f.key] = 'Campo requerido'
     }
     if (Object.keys(errs).length) { setErrors(errs); return }
-    onSave?.(values, mode === 'edit')
+    onSave?.(values, mode === 'edit', editRow ?? undefined)
     setMode(null)
     setValues({})
     setEditRow(null)
