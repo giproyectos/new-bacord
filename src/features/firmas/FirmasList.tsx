@@ -60,10 +60,12 @@ export function FirmasList() {
         { key: 'texto',       label: 'Texto de la firma', required: true },
         { key: 'idGrupo',     label: 'Grupo responsable', required: true, type: 'select', options: grupoOptions },
       ]}
-      onSave={async (values, isEdit) => {
+      onSave={async (values, isEdit, row) => {
         if (isEdit) {
-          const row = data.find(f => f.codigo === values.codigo)
-          if (row) await firmasApi.actualizar(row.idFirma, { descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) })
+          // `row` es la fila que se abrió para editar — buscarla en `data` por `values.codigo` (como
+          // antes) fallaba en silencio si el usuario cambiaba el código, porque ese valor ya no
+          // coincidía con ninguna fila existente.
+          if (row) await firmasApi.actualizar(row.idFirma, { codigo: values.codigo, descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) })
         } else {
           await firmasApi.crear({ codigo: values.codigo, descripcion: values.descripcion, texto: values.texto, idGrupo: Number(values.idGrupo) })
         }
