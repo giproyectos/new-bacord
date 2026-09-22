@@ -10,6 +10,10 @@ beforeEach(async () => {
 })
 
 async function crearOrdenPropia(esc: Awaited<ReturnType<typeof crearEscenarioBasico>>, numero: string) {
+  // La Receta Maestra de la fixture nace en Creación (idEstado 4, ver fixtures.ts) — se activa acá
+  // porque estos tests crean la Orden directo por Prisma (sin pasar por el endpoint que valida
+  // idEstado) y luego sí crean la Fórmula de Control por la API, que exige la receta Activa.
+  await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 1 } })
   return prisma.ordenProceso.create({
     data: {
       idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra,
@@ -121,5 +125,52 @@ describe('POST /api/formulas-control/:id/cancelar — validación de estado', ()
       .set('Authorization', `Bearer ${token}`)
       .send({})
     expect(res.status).toBe(400)
+  })
+})
+
+// La Receta Maestra puede Inactivarse (transición sin restricciones) después de que ya existe una
+// Orden de Proceso pendiente para ella — sin este chequeo, esa orden todavía podía usarse para
+// crear una Fórmula de Control, o una FC ya creada con una receta luego inactivada todavía podía
+// enviarse a producción.
+describe('Fórmula de Control — receta debe estar Activa', () => {
+  it('rechaza crear una FC cuando la Receta Maestra de la Orden ya no está Activa', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const orden = await crearOrdenPropia(esc, 'OP-FC-TEST-5')
+
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 2 } })
+
+    const res = await request(app)
+      .post('/api/formulas-control')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idOrdenProceso: orden.idOrdenProceso })
+    expect(res.status).toBe(409)
+
+    const formulas = await prisma.formulaControl.findMany({ where: { idOrdenProceso: orden.idOrdenProceso } })
+    expect(formulas).toHaveLength(0)
+  })
+
+  it('rechaza enviar a producción una FC cuya Receta Maestra fue Inactivada después de crearla', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    const orden = await crearOrdenPropia(esc, 'OP-FC-TEST-6')
+
+    const resCrear = await request(app)
+      .post('/api/formulas-control')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idOrdenProceso: orden.idOrdenProceso })
+    const idFormulaControl = resCrear.body.idFormulaControl
+
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 2 } })
+
+    const res = await request(app)
+      .post(`/api/formulas-control/${idFormulaControl}/enviar`)
+      .set('Authorization', `Bearer ${token}`)
+    expect(res.status).toBe(409)
+
+    const fc = await prisma.formulaControl.findUniqueOrThrow({ where: { idFormulaControl } })
+    expect(fc.idEstado).toBe(1) // sigue En Tratamiento, no avanzó
+    const br = await prisma.batchRecord.findFirst({ where: { idFormulaControl } })
+    expect(br).toBeNull()
   })
 })

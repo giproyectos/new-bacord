@@ -5,8 +5,7 @@ import { formulaControlApi } from '@/api/formulaControl'
 import { ordenProcesoApi } from '@/api/ordenProceso'
 import { Panel } from '@/components/shared/Panel'
 import { usePuedeEditar } from '@/hooks/usePermisos'
-
-const ESTADO_OP: Record<number, string> = { 1: 'Disponible', 2: 'En FC', 3: 'En Producción' }
+import { ORDEN_PROCESO_ESTADO_LABEL } from '@/constants/ordenProceso'
 
 export function FormulaControlCrear() {
   const puedeEditar = usePuedeEditar('formulas-control')
@@ -83,7 +82,7 @@ export function FormulaControlCrear() {
               ['Cantidad',        `${selected.cantidadOrden.toLocaleString('es-CO')} ${selected.unidadMedida}`],
               ['Fecha Fab.',      selected.fechaFabricacion],
               ['Fecha Cad.',      selected.fechaCaducidad],
-              ['Estado OP',       ESTADO_OP[selected.idEstado] ?? '—'],
+              ['Estado OP',       ORDEN_PROCESO_ESTADO_LABEL[selected.idEstado] ?? '—'],
             ].map(([lbl, val]) => (
               <div key={lbl} style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 12.5 }}>
                 <span style={{ fontWeight: 600, color: '#1E40AF', minWidth: 120 }}>{lbl}:</span>

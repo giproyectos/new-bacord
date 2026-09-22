@@ -5,6 +5,7 @@ import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe } from '../services/audit.js'
+import { assertRecetaActiva } from '../services/recetaMaestra.js'
 
 export const formulasControlRouter = Router()
 
@@ -40,6 +41,10 @@ formulasControlRouter.post(
     const activa = await prisma.formulaControl.findFirst({ where: { idOrdenProceso, idEstado: { not: 3 } } })
     if (activa) throw new ConflictError('Ya existe una Fórmula de Control activa para esta Orden de Proceso')
 
+    // La receta pudo Inactivarse después de crear la Orden de Proceso (transición válida y sin
+    // restricciones) — sin este chequeo, esa orden todavía podía usarse para crear una FC.
+    await assertRecetaActiva(prisma, orden.idRecetaMaestra)
+
     const fc = await prisma.$transaction(async (tx) => {
       const nueva = await tx.formulaControl.create({
         data: {
@@ -69,6 +74,9 @@ formulasControlRouter.post(
     const fc = await prisma.formulaControl.findUnique({ where: { idFormulaControl } })
     if (!fc) throw new NotFoundError('Fórmula de Control no encontrada')
     if (fc.idEstado !== 1) throw new ConflictError('La Fórmula de Control ya fue enviada o cancelada')
+
+    // La receta pudo Inactivarse entre la creación de la FC y este envío a producción.
+    await assertRecetaActiva(prisma, fc.idRecetaMaestra)
 
     const br = await prisma.$transaction(async (tx) => {
       await tx.formulaControl.update({ where: { idFormulaControl }, data: { idEstado: 2 } })

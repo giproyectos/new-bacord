@@ -1,13 +1,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import type { Prisma } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
+import { NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe } from '../services/audit.js'
-
-type Tx = Prisma.TransactionClient | typeof prisma
+import { assertRecetaActiva } from '../services/recetaMaestra.js'
 
 export const ordenesProcesoRouter = Router()
 
@@ -78,18 +76,6 @@ const ordenSchema = z.object({
   formaFarmaceutica: z.string().min(1),
   componentes: z.array(componenteSchema).optional(),
 })
-
-// Una Receta Maestra recorre Creación → Revisión → Aprobado antes de llegar a Activo (idEstado 1,
-// ver recetasMaestras.ts) — es la única que ya pasó por el flujo de aprobación y está lista para
-// producción. Sin este chequeo se podía fabricar (Orden → Fórmula de Control → Batch Record) con
-// una receta todavía en Creación, en Revisión, Rechazada o Inactiva.
-async function assertRecetaActiva(tx: Tx, idRecetaMaestra: number) {
-  const receta = await tx.recetaMaestra.findUnique({ where: { idRecetaMaestra } })
-  if (!receta) throw new ValidationError('La Receta Maestra indicada no existe')
-  if (receta.idEstado !== 1) {
-    throw new ConflictError(`La Receta Maestra "${receta.codigo}" no está Activa — no se puede crear una Orden de Proceso con ella`)
-  }
-}
 
 ordenesProcesoRouter.post(
   '/',
