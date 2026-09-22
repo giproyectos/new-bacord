@@ -12,11 +12,19 @@ export const ordenesProcesoRouter = Router()
 ordenesProcesoRouter.get(
   '/',
   asyncHandler(async (req, res) => {
-    const { numeroOrden, codigoMaterial, idEstado } = req.query
+    const { numeroOrden, codigoMaterial, idEstado, fechaFabricacionDesde, fechaFabricacionHasta } = req.query
     const where: Record<string, unknown> = {}
     if (typeof numeroOrden === 'string' && numeroOrden) where.numeroOrdenProceso = { contains: numeroOrden }
     if (typeof codigoMaterial === 'string' && codigoMaterial) where.codigoMaterial = { contains: codigoMaterial }
     if (typeof idEstado === 'string' && idEstado) where.idEstado = Number(idEstado)
+    if (typeof fechaFabricacionDesde === 'string' && fechaFabricacionDesde || typeof fechaFabricacionHasta === 'string' && fechaFabricacionHasta) {
+      where.fechaFabricacion = {
+        ...(typeof fechaFabricacionDesde === 'string' && fechaFabricacionDesde ? { gte: new Date(fechaFabricacionDesde) } : {}),
+        // La fecha "hasta" llega sin hora (YYYY-MM-DD) — sin fijarla al final del día, quedaría
+        // interpretada como medianoche y excluiría cualquier orden fabricada ese mismo día.
+        ...(typeof fechaFabricacionHasta === 'string' && fechaFabricacionHasta ? { lte: new Date(`${fechaFabricacionHasta}T23:59:59.999`) } : {}),
+      }
+    }
 
     const ordenes = await prisma.ordenProceso.findMany({ where, orderBy: { numeroOrdenProceso: 'asc' }, include: { centro: true } })
     res.json(ordenes.map(({ centro, ...rest }) => ({ ...rest, centro: centro.descripcion })))

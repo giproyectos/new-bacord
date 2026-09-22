@@ -4,22 +4,33 @@ import { useNavigate } from 'react-router-dom'
 import { ordenProcesoApi } from '@/api/ordenProceso'
 import { Panel } from '@/components/shared/Panel'
 import { DataTable, type Column } from '@/components/shared/DataTable'
+import { ORDEN_PROCESO_ESTADO_LABEL } from '@/constants/ordenProceso'
 import type { OrdenProceso } from '@/types'
 
-const ESTADO_OP: Record<number, { label: string; bg: string; color: string }> = {
-  1: { label: 'Liberada',    bg: '#D1FAE5', color: '#065F46' },
-  2: { label: 'En Proceso',  bg: '#FEF3C7', color: '#92400E' },
-  3: { label: 'Cerrada',     bg: '#F1F5F9', color: '#475569' },
+const ESTADO_OP_COLOR: Record<number, { bg: string; color: string }> = {
+  1: { bg: '#F1F5F9', color: '#475569' },
+  2: { bg: '#FEF3C7', color: '#92400E' },
+  3: { bg: '#DBEAFE', color: '#1D4ED8' },
 }
+
+const FILTROS_VACIOS = { NumeroOrden: '', CodigoMaterial: '', IdEstado: '', FechaInicialFabricacion: '', FechaFinalFabricacion: '' }
 
 export function OrdenProcesoList() {
   const navigate = useNavigate()
-  const [filtros, setFiltros] = useState({ NumeroOrden: '', CodigoMaterial: '', IdEstado: '', FechaInicialCreacion: '', FechaFinalCreacion: '', FechaInicialFabricacion: '', FechaFinalFabricacion: '' })
-  const [buscar, setBuscar] = useState(false)
+  const [filtros, setFiltros] = useState(FILTROS_VACIOS)
+  // Solo cambia al hacer clic en "Buscar" (o "Limpiar") — separado de `filtros` para que la
+  // búsqueda no se dispare en cada tecla, sino cuando el usuario confirma.
+  const [filtrosAplicados, setFiltrosAplicados] = useState(FILTROS_VACIOS)
 
   const { data = [], isLoading } = useQuery({
-    queryKey: ['ordenes-proceso', buscar],
-    queryFn: () => ordenProcesoApi.buscar(),
+    queryKey: ['ordenes-proceso', filtrosAplicados],
+    queryFn: () => ordenProcesoApi.buscar({
+      numeroOrden: filtrosAplicados.NumeroOrden || undefined,
+      codigoMaterial: filtrosAplicados.CodigoMaterial || undefined,
+      idEstado: filtrosAplicados.IdEstado ? Number(filtrosAplicados.IdEstado) : undefined,
+      fechaFabricacionDesde: filtrosAplicados.FechaInicialFabricacion || undefined,
+      fechaFabricacionHasta: filtrosAplicados.FechaFinalFabricacion || undefined,
+    }),
   })
 
   const columns: Column<OrdenProceso>[] = [
@@ -38,11 +49,11 @@ export function OrdenProcesoList() {
     {
       key: 'idEstado', header: 'Estado', width: '9%',
       render: r => {
-        const cfg = ESTADO_OP[r.idEstado] ?? ESTADO_OP[1]
+        const color = ESTADO_OP_COLOR[r.idEstado] ?? ESTADO_OP_COLOR[1]
         return (
           <span style={{ padding: '2px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
-            background: cfg.bg, color: cfg.color, whiteSpace: 'nowrap' }}>
-            {cfg.label}
+            background: color.bg, color: color.color, whiteSpace: 'nowrap' }}>
+            {ORDEN_PROCESO_ESTADO_LABEL[r.idEstado] ?? ORDEN_PROCESO_ESTADO_LABEL[1]}
           </span>
         )
       },
@@ -77,30 +88,27 @@ export function OrdenProcesoList() {
               <label>Estado</label>
               <select className="form-control input-sm" value={filtros.IdEstado} onChange={e => setFiltros(f => ({ ...f, IdEstado: e.target.value }))}>
                 <option value="">-- Seleccione --</option>
-                <option value="1">Activo</option>
-                <option value="2">Inactivo</option>
+                {Object.entries(ORDEN_PROCESO_ESTADO_LABEL).map(([id, label]) => (
+                  <option key={id} value={id}>{label}</option>
+                ))}
               </select>
             </div>
           </div>
           <div className="grid-row">
             <div className="form-group">
-              <label>Fecha creación desde</label>
-              <input type="date" className="form-control input-sm" value={filtros.FechaInicialCreacion} onChange={e => setFiltros(f => ({ ...f, FechaInicialCreacion: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label>Fecha creación hasta</label>
-              <input type="date" className="form-control input-sm" value={filtros.FechaFinalCreacion} onChange={e => setFiltros(f => ({ ...f, FechaFinalCreacion: e.target.value }))} />
-            </div>
-            <div className="form-group">
               <label>Fecha fabricación desde</label>
               <input type="date" className="form-control input-sm" value={filtros.FechaInicialFabricacion} onChange={e => setFiltros(f => ({ ...f, FechaInicialFabricacion: e.target.value }))} />
             </div>
+            <div className="form-group">
+              <label>Fecha fabricación hasta</label>
+              <input type="date" className="form-control input-sm" value={filtros.FechaFinalFabricacion} onChange={e => setFiltros(f => ({ ...f, FechaFinalFabricacion: e.target.value }))} />
+            </div>
           </div>
           <div className="form-actions">
-            <button className="btn btn-gray" onClick={() => setFiltros({ NumeroOrden: '', CodigoMaterial: '', IdEstado: '', FechaInicialCreacion: '', FechaFinalCreacion: '', FechaInicialFabricacion: '', FechaFinalFabricacion: '' })}>
+            <button className="btn btn-gray" onClick={() => { setFiltros(FILTROS_VACIOS); setFiltrosAplicados(FILTROS_VACIOS) }}>
               <i className="fa fa-undo" /> Limpiar
             </button>
-            <button className="btn btn-primary" onClick={() => setBuscar(b => !b)}>
+            <button className="btn btn-primary" onClick={() => setFiltrosAplicados(filtros)}>
               <i className="fa fa-search" /> Buscar
             </button>
           </div>

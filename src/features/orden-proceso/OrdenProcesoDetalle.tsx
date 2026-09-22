@@ -6,13 +6,13 @@ import { formulaControlApi } from '@/api/formulaControl'
 import { recetaMaestraApi } from '@/api/recetaMaestra'
 import { batchRecordApi } from '@/api/batchRecord'
 import { usePuedeEditar } from '@/hooks/usePermisos'
+import { ORDEN_PROCESO_ESTADO_LABEL } from '@/constants/ordenProceso'
 import type { OrdenProceso, ComponenteOrden, FormulaControl, RecetaMaestra, BatchRecord } from '@/types'
 
-
-const ESTADO_OP: Record<number, { label: string; bg: string; color: string }> = {
-  1: { label: 'Liberada',   bg: 'rgba(209,250,229,0.15)', color: '#6EE7B7' },
-  2: { label: 'En Proceso', bg: 'rgba(254,243,199,0.15)', color: '#FCD34D' },
-  3: { label: 'Cerrada',    bg: 'rgba(241,245,249,0.15)', color: '#94A3B8' },
+const ESTADO_OP_COLOR: Record<number, { bg: string; color: string }> = {
+  1: { bg: 'rgba(241,245,249,0.15)', color: '#94A3B8' },
+  2: { bg: 'rgba(254,243,199,0.15)', color: '#FCD34D' },
+  3: { bg: 'rgba(191,219,254,0.15)', color: '#93C5FD' },
 }
 
 function MetaItem({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -131,11 +131,11 @@ export function OrdenProcesoDetalle() {
                 borderRadius: 20, fontSize: 11, color: '#BAE6FD', fontWeight: 600 }}>
                 {op.formaFarmaceutica}
               </span>
-              {(() => { const cfg = ESTADO_OP[op.idEstado] ?? ESTADO_OP[1]; return (
+              {(() => { const cfg = ESTADO_OP_COLOR[op.idEstado] ?? ESTADO_OP_COLOR[1]; return (
                 <span style={{ padding: '2px 10px', background: cfg.bg,
                   borderRadius: 20, fontSize: 11, color: cfg.color, fontWeight: 700,
                   border: `1px solid ${cfg.color}33` }}>
-                  {cfg.label}
+                  {ORDEN_PROCESO_ESTADO_LABEL[op.idEstado] ?? ORDEN_PROCESO_ESTADO_LABEL[1]}
                 </span>
               ) })()}
             </div>
