@@ -78,9 +78,10 @@ function splitCSVLine(line: string): string[] {
 }
 
 // ── Core parser (takes pre-split rows) ───────────────────────────────────────
-function parsearFilas(filas: string[][], materiales: Material[], recetas: RecetaMaestra[]): ParseResult {
+function parsearFilas(filas: string[][], materiales: Material[], recetas: RecetaMaestra[], centros: Centro[]): ParseResult {
   const cabeceraMap: Record<string, ParsedOP> = {}
   const invalidas: { rowNum: number; mensaje: string }[] = []
+  const centrosActivos = centros.filter(c => c.activo)
 
   for (let i = 0; i < filas.length; i++) {
     const rowNum = i + 1
@@ -98,6 +99,20 @@ function parsearFilas(filas: string[][], materiales: Material[], recetas: Receta
       const cantidad = parseNum(cantStr)
       if (!cantStr || isNaN(cantidad)) errors.push('Cantidad inválida (debe ser numérico)')
       if (cabeceraMap[numOP]) errors.push(`OP "${numOP}" duplicada en el archivo`)
+      // El backend exige estos campos como no vacíos (ver ordenSchema en ordenesProceso.ts) — si
+      // se validan acá, nunca llegan a producir el 400 que tumbaba el cargue completo sin aviso.
+      if (!um)       errors.push('Unidad de Medida requerida')
+      if (!loteInsp) errors.push('Lote de Inspección requerido')
+      if (!regSan)   errors.push('Registro Sanitario requerido')
+      if (!formaFarm) errors.push('Forma Farmacéutica requerida')
+      // Sin esta validación, un Centro que no coincide con ninguno activo se resolvía en
+      // silencio al primer Centro activo de la lista (ver resolverCentro) — la Orden quedaba
+      // cargada contra una planta distinta a la que el archivo indicaba, sin ningún aviso.
+      if (centro && !centrosActivos.some(c => c.descripcion.toLowerCase() === centro.trim().toLowerCase())) {
+        errors.push(`Centro "${centro}" no coincide con ningún Centro activo`)
+      } else if (!centro) {
+        errors.push('Centro requerido')
+      }
 
       cabeceraMap[numOP] = {
         rowNum, numeroOrdenProceso: numOP,
@@ -154,16 +169,16 @@ function parsearFilas(filas: string[][], materiales: Material[], recetas: Receta
 }
 
 // ── CSV parser ────────────────────────────────────────────────────────────────
-function parsearCSV(text: string, materiales: Material[], recetas: RecetaMaestra[]): ParseResult {
+function parsearCSV(text: string, materiales: Material[], recetas: RecetaMaestra[], centros: Centro[]): ParseResult {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0)
-  return parsearFilas(lines.map(splitCSVLine), materiales, recetas)
+  return parsearFilas(lines.map(splitCSVLine), materiales, recetas, centros)
 }
 
 // ── XLSX parser — first cell must be a code (no spaces, alphanumeric+hyphens) ──
 const isDataCode = (v: unknown): boolean =>
   typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(v.trim())
 
-async function parsearXLSX(data: ArrayBuffer, materiales: Material[], recetas: RecetaMaestra[]): Promise<ParseResult> {
+async function parsearXLSX(data: ArrayBuffer, materiales: Material[], recetas: RecetaMaestra[], centros: Centro[]): Promise<ParseResult> {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(data, { type: 'array', cellDates: true })
   const sheetName = wb.SheetNames.includes('Cargue_Ordenes') ? 'Cargue_Ordenes' : wb.SheetNames[0]
@@ -184,7 +199,7 @@ async function parsearXLSX(data: ArrayBuffer, materiales: Material[], recetas: R
       })
     )
 
-  return parsearFilas(filas, materiales, recetas)
+  return parsearFilas(filas, materiales, recetas, centros)
 }
 
 // ── Historial columns ─────────────────────────────────────────────────────────
@@ -197,7 +212,10 @@ const histCols: Column<CargueRegistro>[] = [
   {
     key: 'errores', header: 'Errores', width: '8%', align: 'center',
     render: r => (
-      <span style={{ color: r.errores > 0 ? '#DC2626' : '#2D5D4A', fontWeight: 700 }}>
+      <span
+        style={{ color: r.errores > 0 ? '#DC2626' : '#2D5D4A', fontWeight: 700 }}
+        title={r.detalleErrores.map(e => `${e.numeroOrdenProceso} — ${e.motivo}`).join('\n')}
+      >
         {r.errores}
       </span>
     ),
@@ -231,6 +249,8 @@ export function CargueOPList() {
   const [materiales, setMateriales] = useState<Material[]>([])
   const [recetas, setRecetas] = useState<RecetaMaestra[]>([])
   const [centros, setCentros] = useState<Centro[]>([])
+  const [errorConfirmar, setErrorConfirmar] = useState('')
+  const [detalleErrores, setDetalleErrores] = useState<{ numeroOrdenProceso: string; motivo: string }[]>([])
 
   useEffect(() => {
     ordenProcesoApi.buscarCargues().then(setHistorial)
@@ -241,19 +261,20 @@ export function CargueOPList() {
 
   const procesar = useCallback(async (f: File) => {
     setFile(f)
+    setErrorConfirmar('')
     const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
     try {
       if (ext === 'xlsx' || ext === 'xls') {
         const buf = await f.arrayBuffer()
-        setParsed(await parsearXLSX(buf, materiales, recetas))
+        setParsed(await parsearXLSX(buf, materiales, recetas, centros))
       } else {
-        setParsed(parsearCSV(await f.text(), materiales, recetas))
+        setParsed(parsearCSV(await f.text(), materiales, recetas, centros))
       }
       setStep('preview')
     } catch (err) {
       console.error('Error procesando archivo:', err)
     }
-  }, [materiales, recetas])
+  }, [materiales, recetas, centros])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false)
@@ -271,17 +292,22 @@ export function CargueOPList() {
 
   const resetear = () => {
     setStep('idle'); setFile(null); setParsed(null); setExpanded(new Set())
+    setErrorConfirmar(''); setDetalleErrores([])
   }
 
+  // El parser ya exige que `centro` coincida con un Centro activo antes de habilitar "Confirmar" —
+  // acá no se adivina un Centro de respaldo: si de algún modo llega sin coincidencia, se envía 0
+  // para que el backend lo rechace (violación de llave foránea) en vez de cargarlo contra el
+  // Centro equivocado en silencio.
   const resolverCentro = (nombre: string): number => {
     const centrosActivos = centros.filter(c => c.activo)
-    return centrosActivos.find(c => c.descripcion.toLowerCase() === nombre?.trim().toLowerCase())?.id
-      ?? centrosActivos[0]?.id ?? 0
+    return centrosActivos.find(c => c.descripcion.toLowerCase() === nombre?.trim().toLowerCase())?.id ?? 0
   }
 
   const confirmar = async () => {
     if (!parsed || !file) return
     setStep('saving')
+    setErrorConfirmar('')
 
     const ordenesPayload: Omit<OrdenProceso, 'idOrdenProceso'>[] = parsed.ordenes.map(op => ({
       idRecetaMaestra: op.recetaMatch?.idRecetaMaestra ?? 0,
@@ -310,12 +336,21 @@ export function CargueOPList() {
         codigoListaMateriales: c.codigoListaMateriales,
       })))
 
-    const res = await ordenProcesoApi.confirmarCargue(file.name, ordenesPayload, compPayload)
-
-    if (res.estado) {
-      ordenProcesoApi.buscarCargues().then(setHistorial)
+    try {
+      const res = await ordenProcesoApi.confirmarCargue(file.name, ordenesPayload, compPayload)
+      setDetalleErrores(res.datos?.detalleErrores ?? [])
+      if (res.estado) {
+        ordenProcesoApi.buscarCargues().then(setHistorial)
+      }
+      setStep('done')
+    } catch (err) {
+      // Antes no había ningún catch: si el backend rechazaba la petición completa (ej. una fila
+      // con un campo requerido vacío que el parser de este archivo no validaba), la promesa se
+      // rechazaba sin manejo y la UI se quedaba en el spinner "Procesando..." para siempre, sin
+      // guardar nada y sin que el usuario se enterara de qué pasó.
+      setErrorConfirmar(err instanceof Error ? err.message : 'No se pudo confirmar el cargue')
+      setStep('preview')
     }
-    setStep('done')
   }
 
   // Derived counts
@@ -346,6 +381,19 @@ export function CargueOPList() {
             <i className="fa fa-exclamation-triangle" style={{ marginRight: 6 }} />
             {totalSinRM} orden{totalSinRM > 1 ? 'es' : ''} sin Receta Maestra vinculada — revísalas en el módulo de Órdenes de Proceso.
           </p>
+        )}
+        {detalleErrores.length > 0 && (
+          <div style={{ textAlign: 'left', background: '#FEF2F2', border: '1.5px solid #FECACA',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, color: '#991B1B', marginBottom: 6, fontSize: 12.5 }}>
+              <i className="fa fa-exclamation-circle" /> {detalleErrores.length} orden{detalleErrores.length > 1 ? 'es' : ''} no se pudo{detalleErrores.length > 1 ? 'ieron' : ''} cargar
+            </div>
+            {detalleErrores.map((e, i) => (
+              <div key={i} style={{ color: '#7F1D1D', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.6 }}>
+                · <strong>{e.numeroOrdenProceso}</strong> — {e.motivo}
+              </div>
+            ))}
+          </div>
         )}
         <button className="btn btn-primary" onClick={resetear}>
           <i className="fa fa-plus" /> Nuevo cargue
@@ -628,6 +676,14 @@ export function CargueOPList() {
                 </div>
               )
             })}
+
+            {errorConfirmar && (
+              <div style={{ background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 8,
+                padding: '10px 14px', marginTop: 12, color: '#991B1B', fontSize: 12.5 }}>
+                <i className="fa fa-exclamation-circle" style={{ marginRight: 6 }} />
+                {errorConfirmar}
+              </div>
+            )}
 
             {/* Action bar */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center',

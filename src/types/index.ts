@@ -92,6 +92,7 @@ export interface CargueRegistro {
   totalComponentes: number
   errores: number
   estado: 'Exitoso' | 'Con errores' | 'Fallido'
+  detalleErrores: { numeroOrdenProceso: string; motivo: string }[]
 }
 export interface PreLlenadoBR {
   idBatchRecord: number

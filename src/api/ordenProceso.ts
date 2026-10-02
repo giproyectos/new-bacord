@@ -17,7 +17,10 @@ export const ordenProcesoApi = {
     archivo: string,
     ordenes: Omit<OrdenProceso, 'idOrdenProceso'>[],
     componentes: Omit<ComponenteOrden, 'idComponente' | 'idOrdenProceso'>[][]
-  ): Promise<Resultado<{ totalCargadas: number; totalComponentes: number; errores: number }>> =>
+  ): Promise<Resultado<{
+    totalCargadas: number; totalComponentes: number; errores: number
+    detalleErrores: { numeroOrdenProceso: string; motivo: string }[]
+  }>> =>
     (await http.post('/ordenes-proceso/cargue', { archivo, ordenes, componentes })).data,
 
   buscarCargues: async (): Promise<CargueRegistro[]> => (await http.get<CargueRegistro[]>('/ordenes-proceso/cargues')).data,

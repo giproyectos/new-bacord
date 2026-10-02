@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { AppError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe } from '../services/audit.js'
 import { assertRecetaActiva } from '../services/recetaMaestra.js'
 
@@ -38,7 +38,11 @@ ordenesProcesoRouter.get(
       orderBy: { fechaCargue: 'desc' },
       include: { usuario: { select: { login: true } } },
     })
-    res.json(cargues.map((c) => ({ ...c, usuario: c.usuario.login })))
+    res.json(cargues.map(({ detalleErrores, usuario, ...c }) => ({
+      ...c,
+      usuario: usuario.login,
+      detalleErrores: detalleErrores ? JSON.parse(detalleErrores) : [],
+    })))
   })
 )
 
@@ -130,8 +134,8 @@ ordenesProcesoRouter.post(
     if (ordenes.length !== componentes.length) throw new ValidationError('ordenes y componentes deben tener la misma longitud')
 
     let totalComponentes = 0
-    let errores = 0
     const numeros: string[] = []
+    const detalleErrores: { numeroOrdenProceso: string; motivo: string }[] = []
 
     await prisma.$transaction(async (tx) => {
       for (let i = 0; i < ordenes.length; i++) {
@@ -148,10 +152,15 @@ ordenesProcesoRouter.post(
           })
           totalComponentes += componentes[i].length
           numeros.push(rest.numeroOrdenProceso)
-        } catch {
-          errores++
+        } catch (err) {
+          detalleErrores.push({
+            numeroOrdenProceso: rest.numeroOrdenProceso,
+            motivo: err instanceof AppError ? err.message : 'Error inesperado al guardar esta orden',
+          })
         }
       }
+
+      const errores = detalleErrores.length
 
       await tx.cargueRegistro.create({
         data: {
@@ -161,6 +170,7 @@ ordenesProcesoRouter.post(
           totalComponentes,
           errores,
           estado: errores === 0 ? 'Exitoso' : errores === ordenes.length ? 'Fallido' : 'Con errores',
+          detalleErrores: errores > 0 ? JSON.stringify(detalleErrores) : null,
         },
       })
 
@@ -174,10 +184,11 @@ ordenesProcesoRouter.post(
       }
     })
 
+    const errores = detalleErrores.length
     res.json({
       estado: true,
       mensaje: `${ordenes.length - errores} órdenes cargadas correctamente`,
-      datos: { totalCargadas: ordenes.length - errores, totalComponentes, errores },
+      datos: { totalCargadas: ordenes.length - errores, totalComponentes, errores, detalleErrores },
     })
   })
 )
