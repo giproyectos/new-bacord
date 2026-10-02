@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { NotFoundError, ValidationError } from '../utils/errors.js'
+import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos, type AuditCambio } from '../services/audit.js'
 
 export const estrategiasFirmaRouter = Router()
@@ -68,6 +68,24 @@ async function assertFirmasValidas(firmas: { idFirma: number }[] | undefined) {
   }
 }
 
+// Mismo riesgo que assertDetalleSinBatchRecords en detalles.ts, por esta otra puerta: un Detalle
+// consulta su estrategiaFirma EN VIVO (ver batchRecordProgress.ts), así que agregar, quitar o
+// reordenar las firmas de una Estrategia ya asignada a un Detalle en uso cambiaría retroactivamente
+// qué se exigió para cerrar un Batch Record en ejecución o ya liberado — detallesRouter.put ya
+// bloquea reasignar la Estrategia de un Detalle en ese caso, pero no evita editar la Estrategia
+// misma desde acá.
+async function assertEstrategiaSinBatchRecords(id: number) {
+  const enUso = await prisma.detalle.findFirst({
+    where: {
+      idEstrategiaFirma: id,
+      recetaDetalles: { some: { recetaProceso: { recetaMaestra: { batchRecords: { some: {} } } } } },
+    },
+  })
+  if (enUso) {
+    throw new ConflictError('Esta Estrategia de Firma ya está asignada a un formulario en una Receta Maestra con Batch Records — no se pueden modificar sus firmas')
+  }
+}
+
 estrategiasFirmaRouter.post(
   '/',
   requireModuloEditar('estrategias-firma'),
@@ -111,6 +129,7 @@ estrategiasFirmaRouter.put(
 
     const anterior = await prisma.estrategiaFirma.findUnique({ where: { id }, include })
     if (!anterior) throw new NotFoundError('Estrategia de firma no encontrada')
+    if (firmas) await assertEstrategiaSinBatchRecords(id)
 
     const estrategia = await prisma.$transaction(async (tx) => {
       if (firmas) {

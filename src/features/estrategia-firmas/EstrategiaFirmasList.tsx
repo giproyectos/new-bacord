@@ -27,9 +27,10 @@ function grupoBadge(grupo: string) {
 
 // ── FirmasModal ───────────────────────────────────────────────────────────────
 
-function FirmasModal({ estrategia, firmasCatalogo, onClose, onSave }: {
+function FirmasModal({ estrategia, firmasCatalogo, error, onClose, onSave }: {
   estrategia: EstrategiaFirma
   firmasCatalogo: FirmaApi[]
+  error: string
   onClose: () => void
   onSave: (items: EstrategiaFirmaItem[]) => void
 }) {
@@ -217,6 +218,14 @@ function FirmasModal({ estrategia, firmasCatalogo, onClose, onSave }: {
               </div>
             </div>
           )}
+
+          {error && (
+            <div style={{ marginTop: 16, padding: '10px 12px', background: '#FEF2F2',
+              border: '1.5px solid #FECACA', borderRadius: 'var(--r-sm)', color: '#B91C1C', fontSize: 12.5 }}>
+              <i className="fa fa-exclamation-triangle" style={{ marginRight: 6 }} />
+              {error}
+            </div>
+          )}
         </div>
 
         <div style={{ padding: '14px 22px', borderTop: '1px solid var(--hair)',
@@ -242,6 +251,8 @@ export function EstrategiaFirmasList() {
   const [firmasModal, setFirmasModal] = useState<EstrategiaFirma | null>(null)
   const [modalCrear, setModalCrear] = useState(false)
   const [editando, setEditando] = useState<EstrategiaFirma | null>(null)
+  const [eliminarModal, setEliminarModal] = useState<EstrategiaFirma | null>(null)
+  const [errorFirmas, setErrorFirmas] = useState('')
   const [form, setForm] = useState({ codigo: '', descripcion: '', gruposDerogacion: [] as string[] })
 
   const cargar = () => Promise.all([estrategiasFirmaApi.listar(), firmasApi.listar(), gruposResponsablesApi.listar()]).then(([efs, firmas, gs]) => {
@@ -274,18 +285,27 @@ export function EstrategiaFirmasList() {
     cargar()
   }
 
-  const handleEliminar = async (id: number) => {
-    await estrategiasFirmaApi.eliminar(id)
+  const handleEliminar = async () => {
+    if (!eliminarModal) return
+    await estrategiasFirmaApi.eliminar(eliminarModal.id)
+    setEliminarModal(null)
     cargar()
   }
 
   const handleSaveFirmas = async (items: EstrategiaFirmaItem[]) => {
     if (!firmasModal) return
-    await estrategiasFirmaApi.actualizar(firmasModal.id, {
-      firmas: items.map(i => ({ idFirma: i.idFirma, texto: i.texto, orden: i.orden })),
-    })
-    setFirmasModal(null)
-    cargar()
+    try {
+      await estrategiasFirmaApi.actualizar(firmasModal.id, {
+        firmas: items.map(i => ({ idFirma: i.idFirma, texto: i.texto, orden: i.orden })),
+      })
+      setFirmasModal(null)
+      cargar()
+    } catch (err) {
+      // Antes no había ningún catch: si el backend rechazaba el cambio (ej. la Estrategia ya está
+      // en uso por un Detalle con Batch Records), la promesa se rechazaba sin manejo — el modal se
+      // quedaba abierto pero sin mostrar ningún error, dejando al usuario sin saber qué pasó.
+      setErrorFirmas(err instanceof Error ? err.message : 'No se pudieron guardar las firmas')
+    }
   }
 
   const columns: Column<EstrategiaFirma>[] = [
@@ -321,12 +341,12 @@ export function EstrategiaFirmasList() {
               cursor: 'pointer', color: 'var(--forest)', fontSize: 13, display: 'grid', placeItems: 'center' }}>
             <i className="fa fa-edit" />
           </button>
-          <button title="Administrar firmas" onClick={() => setFirmasModal(r)}
+          <button title="Administrar firmas" onClick={() => { setFirmasModal(r); setErrorFirmas('') }}
             style={{ width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent',
               cursor: 'pointer', color: 'var(--orange)', fontSize: 13, display: 'grid', placeItems: 'center' }}>
             <i className="fa fa-signature" />
           </button>
-          <button title="Eliminar" onClick={() => handleEliminar(r.id)}
+          <button title="Eliminar" onClick={() => setEliminarModal(r)}
             style={{ width: 28, height: 28, borderRadius: 7, border: 'none', background: 'transparent',
               cursor: 'pointer', color: '#dc2626', fontSize: 13, display: 'grid', placeItems: 'center' }}>
             <i className="fa fa-trash-alt" />
@@ -431,9 +451,36 @@ export function EstrategiaFirmasList() {
         <FirmasModal
           estrategia={firmasModal}
           firmasCatalogo={firmasCatalogo}
-          onClose={() => setFirmasModal(null)}
+          error={errorFirmas}
+          onClose={() => { setFirmasModal(null); setErrorFirmas('') }}
           onSave={handleSaveFirmas}
         />
+      )}
+
+      {/* Confirmar eliminar */}
+      {eliminarModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(10,21,48,.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setEliminarModal(null)}>
+          <div style={{ background: 'var(--paper)', borderRadius: 'var(--r-xl)', boxShadow: 'var(--sh-3)',
+            width: '100%', maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: '22px 22px 14px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#FEF2F2', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                <i className="fa fa-exclamation-triangle" style={{ color: '#DC2626', fontSize: 18 }} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', marginBottom: 6 }}>Desactivar estrategia</div>
+                <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>
+                  ¿Desactivar <strong>{eliminarModal.descripcion}</strong>? Dejará de estar disponible para nuevos formularios.
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: '14px 22px', borderTop: '1px solid var(--hair)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-gray" onClick={() => setEliminarModal(null)}><i className="fa fa-undo" /> Cancelar</button>
+              <button className="btn btn-danger" onClick={handleEliminar}><i className="fa fa-trash-alt" /> Desactivar</button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )
