@@ -72,10 +72,12 @@ export function MaterialesList() {
           { key: 'descripcion', label: 'Descripción', required: true },
           { key: 'tipo', label: 'Tipo', required: true, type: 'select', options: TIPO_MATERIAL_OPTIONS },
         ]}
-        onSave={async (values, isEdit) => {
+        onSave={async (values, isEdit, row) => {
           const tipo = values.tipo as TipoMaterial
           if (isEdit) {
-            const row = data.find(m => m.codigo === values.codigo)
+            // `row` es la fila que se abrió para editar — buscarla en `data` por `values.codigo` (como
+            // antes) fallaba en silencio si el usuario cambiaba el código, porque ese valor ya no
+            // coincidía con ninguna fila existente.
             if (row) await materialesApi.actualizar(row.id, { descripcion: values.descripcion, tipo })
           } else {
             await materialesApi.crear({ codigo: values.codigo, descripcion: values.descripcion, tipo })
@@ -110,9 +112,11 @@ export function ParametrosList() {
         { key: 'valor',       label: 'Valor',       required: true },
         { key: 'descripcion', label: 'Descripción' },
       ]}
-      onSave={async (values, isEdit) => {
+      onSave={async (values, isEdit, row) => {
+        // `row` es la fila que se abrió para editar — buscarla en `data` por `values.nombre` (como
+        // antes) fallaba en silencio si el usuario cambiaba el nombre, porque ese valor ya no
+        // coincidía con ninguna fila existente.
         if (isEdit) {
-          const row = data.find(p => p.nombre === values.nombre)
           if (row) await parametrosApi.actualizar(row.id, values)
         } else {
           await parametrosApi.crear({ nombre: values.nombre, valor: values.valor, descripcion: values.descripcion })
