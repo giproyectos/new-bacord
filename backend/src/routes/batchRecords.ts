@@ -6,7 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { getEstructuraProcesos, recomputePorcentajeAvance } from '../services/batchRecordProgress.js'
 import { logAudit, actorDe, type AuditCambio } from '../services/audit.js'
-import { findFirmaSeccionEstrategia } from '../services/formioSchema.js'
+import { findFirmaSeccionEstrategia, limitesNumericos, valoresFueraDeRango } from '../services/formioSchema.js'
 import { verificarPin } from '../services/pin.js'
 
 export const batchRecordsRouter = Router()
@@ -445,6 +445,27 @@ batchRecordsRouter.post(
     }
     const firmaPermitida = firmas.find((f) => f.idFirma === idFirma)
     if (!firmaPermitida) throw new ValidationError('Esa firma no está permitida para este punto del formulario')
+
+    // No se firma un formulario con valores fuera de rango sin una desviación registrada para
+    // ese campo (abierta o cerrada). La misma regla la aplica el navegador, pero el servidor es
+    // quien la garantiza: la API directa no puede saltársela.
+    const datosDetalle = await prisma.batchRecordDetalleData.findUnique({
+      where: { idBatchRecord_idDetalle: { idBatchRecord, idDetalle } },
+    })
+    const fueraDeRango = valoresFueraDeRango(
+      limitesNumericos(detalle.jsonSchema),
+      datosDetalle ? parseJsonDataSeguro(datosDetalle.jsonData) : {}
+    )
+    if (fueraDeRango.length > 0) {
+      const sinDesviacion: string[] = []
+      for (const f of fueraDeRango) {
+        const reportada = await prisma.desviacion.findFirst({ where: { idBatchRecord, idDetalle, campo: f.campo } })
+        if (!reportada) sinDesviacion.push(f.mensaje)
+      }
+      if (sinDesviacion.length > 0) {
+        throw new ConflictError(`No se puede firmar con valores fuera de rango sin desviación reportada: ${sinDesviacion.join('; ')}`)
+      }
+    }
 
     const usuario = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
     if (!usuario || !usuario.activo || usuario.bloqueado) {

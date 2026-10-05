@@ -104,6 +104,66 @@ describe('POST /api/batch-records/:id/firmas', () => {
     const firmas = await prisma.batchRecordFirma.findMany({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
     expect(firmas).toHaveLength(0)
   })
+
+  // Mismo límite que el navegador (render.html): firmar con un valor fuera de rango exige una
+  // desviación reportada para ese campo. Sin esto, la API directa podía firmar un valor fuera de
+  // especificación en un lote GMP.
+  async function escenarioConLimite(valor: number) {
+    const esc = await crearEscenarioBasico()
+    const idDetalle = esc.procesos[0].idDetalle
+    await prisma.detalle.update({
+      where: { id: idDetalle },
+      data: { jsonSchema: JSON.stringify({ components: [{ type: 'number', key: 'peso', label: 'Peso', validate: { min: 0, max: 10 } }] }) },
+    })
+    await prisma.batchRecordDetalleData.create({
+      data: { idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle, jsonData: JSON.stringify({ peso: valor }) },
+    })
+    return { esc, idDetalle }
+  }
+
+  it('rechaza firmar un valor fuera de rango sin desviación reportada', async () => {
+    const { esc, idDetalle } = await escenarioConLimite(50)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    expect(res.status).toBe(409)
+    const firmas = await prisma.batchRecordFirma.findMany({ where: { idBatchRecord: esc.batchRecord.idBatchRecord } })
+    expect(firmas).toHaveLength(0)
+  })
+
+  it('permite firmar un valor fuera de rango cuando ya hay una desviación reportada para ese campo', async () => {
+    const { esc, idDetalle } = await escenarioConLimite(50)
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.desviacion.create({
+      data: {
+        idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle, campo: 'peso', labelCampo: 'Peso',
+        valorIngresado: '50', limiteInfo: 'máx. 10', descripcion: 'Verificación', idUsuarioReporta: esc.usuarioAdmin.idUsuario,
+      },
+    })
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    expect(res.status).toBe(201)
+  })
+
+  it('permite firmar un valor dentro de rango sin desviación', async () => {
+    const { esc, idDetalle } = await escenarioConLimite(5)
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .post(`/api/batch-records/${esc.batchRecord.idBatchRecord}/firmas`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idDetalle, idFirma: esc.firma.idFirma, login: esc.usuarioAdmin.login, pin: PIN_PLANO })
+
+    expect(res.status).toBe(201)
+  })
 })
 
 describe('POST /api/batch-records/:id/procesos/:idProceso/cerrar', () => {
