@@ -51,6 +51,15 @@ function formatCambios(cambios: AuditEntry['cambios']): string {
     .join(' | ')
 }
 
+// Varios de estos campos son texto libre que un usuario puede escribir (p. ej. la descripción de
+// un Material, o el motivo de una acción) y terminan en este CSV. Si empiezan con un carácter que
+// Excel/LibreOffice interpreta como inicio de fórmula (=, +, -, @), el programa de hojas de
+// cálculo ejecuta esa "fórmula" al abrir el archivo en vez de mostrar el texto — anteponerle un
+// apóstrofe lo neutraliza sin cambiar lo que se ve.
+function sinFormula(valor: string): string {
+  return /^[=+\-@]/.test(valor) ? `'${valor}` : valor
+}
+
 function exportCsv(entries: AuditEntry[]) {
   const headers = ['Fecha', 'Hora', 'Usuario', 'Nombre', 'Cargo', 'Acción', 'Entidad', 'ID', 'Descripción', 'Módulo', 'Motivo', 'N° Cambios', 'Detalle de Cambios']
   const rows = entries.map(e => {
@@ -64,7 +73,7 @@ function exportCsv(entries: AuditEntry[]) {
       e.motivo ?? '',
       String(e.cambios?.length ?? 0),
       formatCambios(e.cambios),
-    ].map(v => `"${v.replace(/"/g, '""')}"`)
+    ].map(v => `"${sinFormula(v).replace(/"/g, '""')}"`)
   })
   const csv = [headers, ...rows].map(r => r.join(',')).join('\r\n')
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
