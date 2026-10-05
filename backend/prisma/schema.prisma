@@ -323,6 +323,9 @@ model CargueMaterialRegistro {
   totalMateriales Int
   errores        Int
   estado         String // 'Exitoso' | 'Con errores' | 'Fallido'
+  // JSON [{ codigo, motivo }] — mismo propósito que CargueRegistro.detalleErrores: poder decir
+  // qué fila falló y por qué, en vez de asumir "código duplicado" sin verificarlo.
+  detalleErrores String?  @db.Text
 }
 
 // ── Fórmula de Control ───────────────────────────────────────────────────────

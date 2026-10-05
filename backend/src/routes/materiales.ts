@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
-import { ValidationError, NotFoundError } from '../utils/errors.js'
+import { AppError, ValidationError, NotFoundError } from '../utils/errors.js'
 import { logAudit, actorDe, diffObjetos } from '../services/audit.js'
 
 export const materialesRouter = Router()
@@ -33,6 +34,7 @@ materialesRouter.get(
     res.json(registros.map(r => ({
       id: r.id, archivo: r.archivo, fechaCargue: r.fechaCargue, usuario: r.usuario.login,
       totalMateriales: r.totalMateriales, errores: r.errores, estado: r.estado,
+      detalleErrores: r.detalleErrores ? JSON.parse(r.detalleErrores) : [],
     })))
   })
 )
@@ -125,20 +127,30 @@ materialesRouter.post(
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const { archivo, materiales } = parsed.data
 
-    let errores = 0
     const creados: string[] = []
+    const detalleErrores: { codigo: string; motivo: string }[] = []
     await prisma.$transaction(async (tx) => {
       for (const m of materiales) {
         try {
           const creado = await tx.material.create({ data: m })
           creados.push(creado.codigo)
-        } catch {
-          errores++
+        } catch (err) {
+          const motivo = err instanceof AppError
+            ? err.message
+            : err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
+              ? `Ya existe un Material con el código "${m.codigo}"`
+              : 'Error inesperado al guardar este material'
+          detalleErrores.push({ codigo: m.codigo, motivo })
         }
       }
+
+      const errores = detalleErrores.length
       const estado = errores === 0 ? 'Exitoso' : errores === materiales.length ? 'Fallido' : 'Con errores'
       await tx.cargueMaterialRegistro.create({
-        data: { archivo, idUsuario: req.auth!.idUsuario, totalMateriales: materiales.length, errores, estado },
+        data: {
+          archivo, idUsuario: req.auth!.idUsuario, totalMateriales: materiales.length, errores, estado,
+          detalleErrores: errores > 0 ? JSON.stringify(detalleErrores) : null,
+        },
       })
       if (creados.length > 0) {
         await logAudit(tx, {
@@ -147,9 +159,10 @@ materialesRouter.post(
         })
       }
     })
+    const errores = detalleErrores.length
     res.status(201).json({
       estado: true, mensaje: 'Cargue procesado',
-      datos: { total: materiales.length, creados: creados.length, errores },
+      datos: { total: materiales.length, creados: creados.length, errores, detalleErrores },
     })
   })
 )
