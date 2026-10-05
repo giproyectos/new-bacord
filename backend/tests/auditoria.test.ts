@@ -4,6 +4,7 @@ import { app } from '../src/app.js'
 import { resetDb, prisma } from './helpers/db.js'
 import { crearEscenarioBasico } from './helpers/fixtures.js'
 import { tokenPara } from './helpers/auth.js'
+import { signToken } from '../src/middleware/auth.js'
 
 beforeEach(async () => {
   await resetDb()
@@ -124,6 +125,72 @@ describe('POST /api/auditoria — restringido a las combinaciones que de verdad 
 
     expect(res.status).toBe(400)
     expect(await prisma.auditEntry.count()).toBe(0)
+  })
+})
+
+// Antes, GET /api/auditoria no tenía ningún gate de módulo — cualquier usuario autenticado podía
+// traer hasta 5000 entradas del historial completo del sistema (incluyendo altas/bajas de
+// Usuarios y Roles) aunque no tuviera el módulo 'auditoria' asignado. El panel embebido en un
+// Batch Record puntual (que sí pasa idEntidad) debe seguir funcionando para cualquier usuario.
+describe('GET /api/auditoria — gate de módulo para el volcado general', () => {
+  async function crearUsuarioSinModulos(esc: Awaited<ReturnType<typeof crearEscenarioBasico>>) {
+    const usuario = await prisma.usuario.create({
+      data: {
+        numeroIdentificacion: '900000030', nombres: 'Operario', apellidos: 'Sin Auditoría',
+        login: 'operario.sin.auditoria', email: 'operario.sin.auditoria@bacord.test',
+        idCentro: esc.centro.id, esAdministrador: false, activo: true,
+      },
+    })
+    return usuario
+  }
+
+  it('rechaza el volcado general (sin idEntidad) a un usuario sin el módulo "auditoria"', async () => {
+    const esc = await crearEscenarioBasico()
+    const usuario = await crearUsuarioSinModulos(esc)
+    // Sin Rol asignado, requireAuth recalcula sus módulos como vacío en cada solicitud,
+    // sin importar lo que diga el token firmado aquí.
+    const token = signToken({
+      idUsuario: usuario.idUsuario, login: usuario.login, esAdministrador: false,
+      modulos: '', modulosEdicion: '',
+    })
+
+    const res = await request(app).get('/api/auditoria').set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(403)
+  })
+
+  it('permite el volcado general a un usuario con el módulo "auditoria"', async () => {
+    const esc = await crearEscenarioBasico()
+    const usuario = await crearUsuarioSinModulos(esc)
+    // requireAuth recalcula los módulos desde el Rol real en cada solicitud — el `modulos` del
+    // token firmado no se usa para autorizar, solo lo que haya quedado asignado en la base.
+    const rol = await prisma.rol.create({
+      data: { nombre: 'Auditor-Test', modulos: 'auditoria', modulosEdicion: '', activo: true },
+    })
+    await prisma.usuario.update({ where: { idUsuario: usuario.idUsuario }, data: { idRol: rol.id } })
+    const token = signToken({
+      idUsuario: usuario.idUsuario, login: usuario.login, esAdministrador: false,
+      modulos: 'auditoria', modulosEdicion: '',
+    })
+
+    const res = await request(app).get('/api/auditoria').set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(200)
+  })
+
+  it('permite la consulta acotada por idEntidad (panel embebido en Batch Record) sin el módulo "auditoria"', async () => {
+    const esc = await crearEscenarioBasico()
+    const usuario = await crearUsuarioSinModulos(esc)
+    const token = signToken({
+      idUsuario: usuario.idUsuario, login: usuario.login, esAdministrador: false,
+      modulos: '', modulosEdicion: '',
+    })
+
+    const res = await request(app)
+      .get(`/api/auditoria?entidad=BatchRecord&idEntidad=${esc.batchRecord.idBatchRecord}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(res.status).toBe(200)
   })
 })
 
