@@ -68,7 +68,7 @@ interface DetalleRow extends EstructuraDetalle { idProceso: number; orden: numbe
 // El separador decimal/miles de los campos número se elige una sola vez por formulario
 // (ver DetallesList.tsx) y se guarda en jsonOptions — form.io lo aplica vía `language` a
 // nivel de formulario completo, así que se traduce a un locale ICU aquí.
-function languageOfDetalle(jsonOptions: string | null | undefined): string {
+export function languageOfDetalle(jsonOptions: string | null | undefined): string {
   try { return JSON.parse(jsonOptions || '{}').numberFormat === ',' ? 'es' : 'en' }
   catch { return 'en' }
 }
@@ -105,7 +105,7 @@ function extractOpMappings(schemaJson: string, preLlenado: Record<string, unknow
 // opMapping (which pre-fills a single value from this batch record's own OP data),
 // this needs a live catalog lookup, so it mutates the schema itself rather than the
 // submission data, before the schema is ever sent to the preview iframe.
-function injectMaterialOptions(schemaJson: string, materiales: Material[]): string {
+export function injectMaterialOptions(schemaJson: string, materiales: Material[]): string {
   try {
     const schema = JSON.parse(schemaJson) as Record<string, unknown>
     function walk(comps: unknown[]): void {
@@ -513,7 +513,7 @@ function FirmaModal({ titulo, subtitulo, texto, grupo, showObservacion, onSubmit
 // ── FormioFrame ───────────────────────────────────────────────────────────
 interface FormioRangeError { key: string; label: string; message: string }
 
-function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDataChange, getInitialData, onValidation, onFieldFocus, onFieldBlur }: {
+export function FormioFrame({ schema, language = 'en', locked = false, lockedKeys, onDataChange, getInitialData, onValidation, onFieldFocus, onFieldBlur }: {
   schema: string
   language?: string
   locked?: boolean

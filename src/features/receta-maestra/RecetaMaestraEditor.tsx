@@ -7,6 +7,7 @@ import { detallesApi, type DetalleApi } from '@/api/detalles'
 import { estrategiasFirmaApi } from '@/api/estrategiasFirma'
 import { usePuedeEditar } from '@/hooks/usePermisos'
 import { RECETA_ESTADO_LABEL } from '@/constants/recetaMaestra'
+import { FormioFrame, injectMaterialOptions, languageOfDetalle } from '@/features/batch-record/EditarBatchRecord'
 import type { RecetaMaestra, EstrategiaFirma } from '@/types'
 
 const estadoColores: Record<number, { bg: string; color: string }> = {
@@ -30,6 +31,46 @@ function swap<T>(arr: T[], i: number, j: number): T[] {
   return n
 }
 
+// Vista previa del batch record: cómo quedaría el lote con la estructura que hay en pantalla.
+// Solo lee datos y devuelve advertencias; no guarda ni cambia nada.
+interface PreviewFormulario {
+  key: number; codigo: string; descripcion: string; estado: string
+  jsonSchema: string; jsonOptions: string | null | undefined
+  estrategia: EstrategiaFirma | null
+}
+interface PreviewEtapa { key: number; orden: number; proceso: string; codigoProceso: string; formularios: PreviewFormulario[] }
+
+function armarVistaPreviaBR(
+  procesos: ProcesoItemEst[],
+  procesosCatalogo: ProcesoItem[],
+  detallesCatalogo: DetalleApi[],
+  estrategias: EstrategiaFirma[],
+): { etapas: PreviewEtapa[]; advertencias: string[] } {
+  const advertencias: string[] = []
+  const etapas: PreviewEtapa[] = [...procesos].sort((a, b) => a.orden - b.orden).map(rp => {
+    const proc = procesosCatalogo.find(p => p.id === rp.idProceso)
+    if (proc && !proc.activo) advertencias.push(`La etapa ${rp.orden} (${proc.codigo}) usa un proceso inactivo.`)
+    const formularios = [...rp.detalles].sort((a, b) => a.orden - b.orden).map((rd): PreviewFormulario | null => {
+      const det = detallesCatalogo.find(d => d.id === rd.idDetalle)
+      if (!det) {
+        advertencias.push(`La etapa ${rp.orden} tiene un formulario que ya no existe en el catálogo.`)
+        return null
+      }
+      if (det.estado !== 'Activo') advertencias.push(`El formulario ${det.codigo} está "${det.estado}", no Activo.`)
+      if (!det.idEstrategiaFirma) advertencias.push(`El formulario ${det.codigo} no tiene estrategia de firma: no se pedirán firmas de cierre.`)
+      return {
+        key: rd.id, codigo: det.codigo, descripcion: det.descripcion, estado: det.estado,
+        jsonSchema: det.jsonSchema ?? '', jsonOptions: det.jsonOptions,
+        estrategia: det.idEstrategiaFirma ? estrategias.find(e => e.id === det.idEstrategiaFirma) ?? null : null,
+      }
+    }).filter((f): f is PreviewFormulario => f !== null)
+    if (formularios.length === 0) advertencias.push(`La etapa ${rp.orden} (${proc?.descripcion ?? '—'}) no tiene formularios.`)
+    return { key: rp.id, orden: rp.orden, proceso: proc?.descripcion ?? '—', codigoProceso: proc?.codigo ?? '—', formularios }
+  })
+  if (etapas.length === 0) advertencias.unshift('La receta no tiene etapas: un batch record no tendría nada que llenar.')
+  return { etapas, advertencias }
+}
+
 export function RecetaMaestraEditor() {
   const puedeEditar = usePuedeEditar('recetas-maestras')
   const { id } = useParams<{ id: string }>()
@@ -42,6 +83,7 @@ export function RecetaMaestraEditor() {
   const [openIds, setOpenIds] = useState<Set<number>>(new Set())
   const [material, setMaterial] = useState<Material | null>(null)
   const [procesosCatalogo, setProcesosCatalogo] = useState<ProcesoItem[]>([])
+  const [materiales, setMateriales] = useState<Material[]>([])
   const [detallesCatalogo, setDetallesCatalogo] = useState<DetalleApi[]>([])
   const [estrategias, setEstrategias] = useState<EstrategiaFirma[]>([])
 
@@ -49,6 +91,7 @@ export function RecetaMaestraEditor() {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [modalPaso, setModalPaso] = useState(false)
+  const [modalVista, setModalVista] = useState(false)
   const [modalDetalle, setModalDetalle] = useState<ProcesoItemEst | null>(null)
   const [warnPaso, setWarnPaso] = useState<ProcesoItemEst | null>(null)
 
@@ -64,6 +107,7 @@ export function RecetaMaestraEditor() {
       setDetallesCatalogo(dets)
       setEstrategias(efs)
       const mats = await materialesApi.listar()
+      setMateriales(mats)
       const mat = mats.find(m => String(m.id) === r.idMateriales) ?? null
       setMaterial(mat)
       if (mat) setProcesosCatalogo(await procesosApi.listar(mat.id))
@@ -170,6 +214,7 @@ export function RecetaMaestraEditor() {
   )
 
   const sortedProcesos = [...procesos].sort((a, b) => a.orden - b.orden)
+  const vista = armarVistaPreviaBR(procesos, procesosCatalogo, detallesCatalogo, estrategias)
   const estado = {
     text: RECETA_ESTADO_LABEL[receta.idEstado] ?? RECETA_ESTADO_LABEL[1],
     ...(estadoColores[receta.idEstado] ?? estadoColores[1]),
@@ -224,6 +269,40 @@ export function RecetaMaestraEditor() {
         .rme-det-code { font-family:var(--f-mono); font-size:10.5px; font-weight:700; color:var(--ink-4); background:var(--paper-2); border:1px solid var(--hair-2); padding:2px 7px; border-radius:4px; flex-shrink:0; }
         .rme-det-name { font-size:13px; font-weight:500; color:var(--ink-2); flex:1; min-width:0; }
         .rme-ef-chip { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:20px; background:#EDE9FE; color:#5B21B6; flex-shrink:0; }
+
+        .rvp-backdrop { position:fixed; inset:0; z-index:200; background:rgba(10,21,48,.55); display:flex; align-items:center; justify-content:center; padding:24px; }
+        .rvp-modal { background:#fff; border-radius:var(--r-md); width:min(980px,100%); max-height:90vh; display:flex; flex-direction:column; box-shadow:var(--sh-3); overflow:hidden; }
+        .rvp-modal-hdr { display:flex; align-items:flex-start; gap:12px; padding:16px 20px; border-bottom:1.5px solid var(--hair-2); background:#FAFBFC; }
+        .rvp-modal-title { font-size:15px; font-weight:700; color:var(--ink); }
+        .rvp-modal-sub { font-size:12px; color:var(--ink-4); margin-top:3px; }
+        .rvp-close { margin-left:auto; background:none; border:none; font-size:24px; line-height:1; color:var(--ink-4); cursor:pointer; padding:0 4px; }
+        .rvp-close:hover { color:var(--ink); }
+        .rvp-modal-body { overflow-y:auto; flex:1; min-height:0; padding-bottom:18px; }
+
+        .rvp-alert { background:#FFFBEB; border:1px solid #FCD34D; border-radius:var(--r-sm); padding:12px 16px; margin:14px 18px 0; color:#92400E; font-size:12.5px; }
+        .rvp-alert-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+        .rvp-alert ul { margin:0; padding-left:20px; display:flex; flex-direction:column; gap:3px; }
+        .rvp-ok { margin:14px 18px 0; color:#065F46; font-size:12.5px; font-weight:600; display:flex; align-items:center; gap:6px; }
+        .rvp-vacio { font-size:12.5px; color:var(--ink-4); font-style:italic; padding:6px 0; }
+
+        .rvp-etapa { padding:18px; border-bottom:1.5px solid var(--hair-2); }
+        .rvp-etapa:last-child { border-bottom:none; }
+        .rvp-etapa-hdr { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+        .rvp-etapa-name { font-size:14px; font-weight:700; color:var(--ink); flex:1; min-width:0; }
+
+        .rvp-form { border:1.5px solid var(--hair-2); border-radius:var(--r-sm); background:#fff; overflow:hidden; margin-bottom:14px; }
+        .rvp-form:last-child { margin-bottom:0; }
+        .rvp-form-hdr { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; background:#FAFBFC; border-bottom:1.5px solid var(--hair-2); }
+        .rvp-form-title { font-size:13px; font-weight:600; color:var(--ink); flex:1; min-width:120px; }
+        .rvp-pill { font-size:10.5px; font-weight:700; padding:2px 9px; border-radius:20px; flex-shrink:0; }
+        .rvp-pill-ok { background:#D1FAE5; color:#065F46; }
+        .rvp-pill-warn { background:#FEF3C7; color:#92400E; }
+        .rvp-pill-none { background:#F1F5F9; color:#475569; }
+        .rvp-form-body { padding:16px 18px; background:#fff; }
+        .rvp-form-foot { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 14px; background:#FAFBFC; border-top:1.5px solid var(--hair-2); }
+        .rvp-foot-label { font-size:11px; font-weight:700; color:var(--ink-4); text-transform:uppercase; letter-spacing:.06em; margin-right:4px; }
+        .rvp-firma { display:inline-flex; align-items:center; gap:7px; background:#EDE9FE; color:#5B21B6; border-radius:20px; padding:3px 11px 3px 4px; font-size:11.5px; font-weight:600; }
+        .rvp-firma-n { width:18px; height:18px; border-radius:50%; background:#5B21B6; color:#fff; font-size:10px; font-weight:700; display:grid; place-items:center; }
         .rme-add-det-btn { display:flex; align-items:center; gap:6px; background:none; border:1.5px dashed var(--hair-2); border-radius:var(--r-sm); padding:6px 12px; font-size:12.5px; font-family:var(--f-sans); color:var(--ink-4); cursor:pointer; transition:border-color 120ms, color 120ms; }
         .rme-add-det-btn:hover { border-color:var(--navy); color:var(--navy); }
 
@@ -308,6 +387,9 @@ export function RecetaMaestraEditor() {
             {sortedProcesos.length} paso{sortedProcesos.length !== 1 ? 's' : ''} ·{' '}
             {sortedProcesos.reduce((s, p) => s + p.detalles.length, 0)} formulario{sortedProcesos.reduce((s, p) => s + p.detalles.length, 0) !== 1 ? 's' : ''}
           </span>
+          <button className="btn btn-gray" style={{ flexShrink: 0 }} onClick={() => setModalVista(true)}>
+            <i className="fa fa-eye" /> Vista previa del batch record
+          </button>
         </div>
 
         {sortedProcesos.length === 0 ? (
@@ -390,6 +472,84 @@ export function RecetaMaestraEditor() {
           </button>
         )}
       </div>
+
+      {/* ── Vista previa del batch record (ventana emergente) ── */}
+      {modalVista && (
+        <div className="rvp-backdrop" onClick={() => setModalVista(false)}>
+          <div className="rvp-modal" onClick={e => e.stopPropagation()}>
+            <div className="rvp-modal-hdr">
+              <div>
+                <div className="rvp-modal-title">Vista previa del batch record</div>
+                <div className="rvp-modal-sub">
+                  Así verá el operario este lote. Refleja lo que hay en pantalla, incluidos los cambios sin guardar. No guarda datos.
+                </div>
+              </div>
+              <button className="rvp-close" title="Cerrar" onClick={() => setModalVista(false)}>×</button>
+            </div>
+            <div className="rvp-modal-body">
+
+        {vista.advertencias.length > 0 ? (
+          <div className="rvp-alert">
+            <div className="rvp-alert-title"><i className="fa fa-exclamation-triangle" /> Revisar antes de activar</div>
+            <ul>
+              {vista.advertencias.map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+          </div>
+        ) : vista.etapas.length > 0 ? (
+          <div className="rvp-ok"><i className="fa fa-check-circle" /> Sin advertencias.</div>
+        ) : null}
+
+        {vista.etapas.map(e => (
+          <div key={e.key} className="rvp-etapa">
+            <div className="rvp-etapa-hdr">
+              <span className="rme-paso-num">{e.orden}</span>
+              <span className="rvp-etapa-name">{e.proceso}</span>
+              <span className="rme-paso-code">{e.codigoProceso}</span>
+            </div>
+
+            {e.formularios.length === 0 ? (
+              <div className="rvp-vacio">Esta etapa no tiene formularios.</div>
+            ) : e.formularios.map(f => (
+              <div key={f.key} className="rvp-form">
+                <div className="rvp-form-hdr">
+                  <span className="rme-det-code">{f.codigo}</span>
+                  <span className="rvp-form-title">{f.descripcion}</span>
+                  <span className={`rvp-pill ${f.estado === 'Activo' ? 'rvp-pill-ok' : 'rvp-pill-warn'}`}>{f.estado}</span>
+                  {f.estrategia
+                    ? <span className="rme-ef-chip">{f.estrategia.codigo}</span>
+                    : <span className="rvp-pill rvp-pill-none">Sin estrategia</span>}
+                </div>
+
+                <div className="rvp-form-body">
+                  <FormioFrame
+                    schema={injectMaterialOptions(f.jsonSchema, materiales)}
+                    language={languageOfDetalle(f.jsonOptions)}
+                  />
+                </div>
+
+                <div className="rvp-form-foot">
+                  {f.estrategia && f.estrategia.firmas.length > 0 ? (
+                    <>
+                      <span className="rvp-foot-label">Firmas de cierre</span>
+                      {[...f.estrategia.firmas].sort((a, b) => a.orden - b.orden).map((x, i) => (
+                        <span key={i} className="rvp-firma">
+                          <span className="rvp-firma-n">{i + 1}</span>
+                          {x.texto} · {x.grupo}
+                        </span>
+                      ))}
+                    </>
+                  ) : (
+                    <span className="rvp-foot-label">No se pedirán firmas de cierre</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal: Agregar paso ── */}
       {modalPaso && (
