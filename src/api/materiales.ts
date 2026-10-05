@@ -27,6 +27,7 @@ export interface CargueMaterialRegistro {
   totalMateriales: number
   errores: number
   estado: 'Exitoso' | 'Con errores' | 'Fallido'
+  detalleErrores: { codigo: string; motivo: string }[]
 }
 
 export const materialesApi = {
@@ -38,7 +39,10 @@ export const materialesApi = {
     (await http.put<Resultado<Material>>(`/materiales/${id}`, data)).data,
   eliminar: async (id: number): Promise<Resultado> => (await http.delete<Resultado>(`/materiales/${id}`)).data,
   cargar: async (archivo: string, materiales: { codigo: string; descripcion: string; tipo: TipoMaterial }[]):
-    Promise<Resultado<{ total: number; creados: number; errores: number }>> =>
+    Promise<Resultado<{
+      total: number; creados: number; errores: number
+      detalleErrores: { codigo: string; motivo: string }[]
+    }>> =>
     (await http.post('/materiales/cargue', { archivo, materiales })).data,
   buscarCargues: async (): Promise<CargueMaterialRegistro[]> =>
     (await http.get<CargueMaterialRegistro[]>('/materiales/cargues')).data,

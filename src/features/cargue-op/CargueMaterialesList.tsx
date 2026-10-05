@@ -82,7 +82,11 @@ export function CargueMaterialesList() {
   const [parsed, setParsed] = useState<ParsedMaterial[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [historial, setHistorial] = useState<CargueMaterialRegistro[]>([])
-  const [resultado, setResultado] = useState<{ total: number; creados: number; errores: number } | null>(null)
+  const [resultado, setResultado] = useState<{
+    total: number; creados: number; errores: number
+    detalleErrores: { codigo: string; motivo: string }[]
+  } | null>(null)
+  const [errorConfirmar, setErrorConfirmar] = useState('')
 
   useEffect(() => { materialesApi.buscarCargues().then(setHistorial) }, [])
 
@@ -98,7 +102,7 @@ export function CargueMaterialesList() {
     if (f) procesar(f)
   }, [procesar])
 
-  const resetear = () => { setStep('idle'); setFile(null); setParsed([]); setResultado(null) }
+  const resetear = () => { setStep('idle'); setFile(null); setParsed([]); setResultado(null); setErrorConfirmar('') }
 
   const totalErrores = parsed.filter(m => m.errors.length > 0).length
   const validos = parsed.filter(m => m.errors.length === 0)
@@ -106,11 +110,20 @@ export function CargueMaterialesList() {
   const confirmar = async () => {
     if (!file || validos.length === 0) return
     setStep('saving')
+    setErrorConfirmar('')
     const payload = validos.map(m => ({ codigo: m.codigo, descripcion: m.descripcion, tipo: m.tipo! }))
-    const res = await materialesApi.cargar(file.name, payload)
-    setResultado(res.datos ?? null)
-    materialesApi.buscarCargues().then(setHistorial)
-    setStep('done')
+    try {
+      const res = await materialesApi.cargar(file.name, payload)
+      setResultado(res.datos ?? null)
+      materialesApi.buscarCargues().then(setHistorial)
+      setStep('done')
+    } catch (err) {
+      // Antes no había ningún catch: si el backend rechazaba la petición, la promesa se rechazaba
+      // sin manejo y la UI se quedaba en "Guardando materiales..." para siempre, sin guardar nada
+      // y sin que el usuario se enterara de qué pasó.
+      setErrorConfirmar(err instanceof Error ? err.message : 'No se pudo confirmar el cargue')
+      setStep('preview')
+    }
   }
 
   const cols: Column<ParsedMaterial>[] = [
@@ -131,7 +144,14 @@ export function CargueMaterialesList() {
     { key: 'fechaCargue', header: 'Fecha', render: r => new Date(r.fechaCargue).toLocaleString() },
     { key: 'usuario', header: 'Usuario' },
     { key: 'totalMateriales', header: 'Materiales', align: 'center' },
-    { key: 'errores', header: 'Errores', align: 'center' },
+    {
+      key: 'errores', header: 'Errores', align: 'center',
+      render: r => (
+        <span title={r.detalleErrores.map(e => `${e.codigo} — ${e.motivo}`).join('\n')}>
+          {r.errores}
+        </span>
+      ),
+    },
     {
       key: 'estado', header: 'Estado', align: 'center',
       render: r => (
@@ -190,6 +210,13 @@ export function CargueMaterialesList() {
               {totalErrores > 0 && <span style={{ fontSize: 13, color: '#DC2626' }}><strong>{totalErrores}</strong> con error (no se cargarán)</span>}
             </div>
             <DataTable<ParsedMaterial> columns={cols} data={parsed} />
+            {errorConfirmar && (
+              <div style={{ background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 8,
+                padding: '10px 14px', marginTop: 12, color: '#991B1B', fontSize: 12.5 }}>
+                <i className="fa fa-exclamation-circle" style={{ marginRight: 6 }} />
+                {errorConfirmar}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
               <button className="btn btn-gray" onClick={resetear}><i className="fa fa-undo" /> Cancelar</button>
               {puedeEditar && (
@@ -214,8 +241,20 @@ export function CargueMaterialesList() {
             <p style={{ fontSize: 14, fontWeight: 600, color: '#334155', marginBottom: 4 }}>Cargue completado</p>
             <p style={{ fontSize: 13, color: '#64748B', marginBottom: 18 }}>
               {resultado?.creados ?? 0} de {resultado?.total ?? 0} materiales creados
-              {resultado && resultado.errores > 0 && ` — ${resultado.errores} fallaron (código duplicado)`}
             </p>
+            {resultado && resultado.detalleErrores.length > 0 && (
+              <div style={{ textAlign: 'left', maxWidth: 480, margin: '0 auto 18px', background: '#FEF2F2',
+                border: '1.5px solid #FECACA', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ fontWeight: 700, color: '#991B1B', marginBottom: 6, fontSize: 12.5 }}>
+                  <i className="fa fa-exclamation-circle" /> {resultado.detalleErrores.length} material{resultado.detalleErrores.length > 1 ? 'es' : ''} no se pudo{resultado.detalleErrores.length > 1 ? 'ieron' : ''} cargar
+                </div>
+                {resultado.detalleErrores.map((e, i) => (
+                  <div key={i} style={{ color: '#7F1D1D', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.6 }}>
+                    · <strong>{e.codigo}</strong> — {e.motivo}
+                  </div>
+                ))}
+              </div>
+            )}
             <button className="btn btn-primary" onClick={resetear}><i className="fa fa-upload" /> Cargar otro archivo</button>
           </div>
         )}
