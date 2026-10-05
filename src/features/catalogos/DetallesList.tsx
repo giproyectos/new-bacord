@@ -116,6 +116,20 @@ const TIME_FORMATS: { v: string; label: string }[] = [
   { v: 'hh:mm a', label: '11:59 PM (12h)' },
 ]
 
+// Al guardar, fecha y hora se unen con un espacio ("dd/MM/yyyy hh:mm a"), pero el formato de hora
+// de 12 h también lleva espacio. Por eso no se parte a ciegas: se usan enableDate/enableTime para
+// saber qué parte es cuál. Un componente solo-hora guarda el formato completo como timeFormat.
+function partesFormatoFechaHora(rawType: string, c: Record<string, unknown>): { dateFormat?: string; timeFormat?: string } {
+  if (rawType === 'time') return { timeFormat: typeof c.format === 'string' ? c.format : undefined }
+  if (rawType !== 'datetime' || typeof c.format !== 'string') return {}
+  const fmt = c.format
+  if (c.enableDate === false) return { timeFormat: fmt }
+  if (c.enableTime === false) return { dateFormat: fmt }
+  const corte = fmt.indexOf(' ')
+  if (corte < 0) return { dateFormat: fmt }
+  return { dateFormat: fmt.slice(0, corte), timeFormat: fmt.slice(corte + 1) }
+}
+
 interface Detalle {
   id: number; codigo: string; descripcion: string
   estado: EstadoFormulario
@@ -569,10 +583,7 @@ function parseComp(c: Record<string, unknown>): FormComp {
     minOp: c.minOp as '>' | '>=' | undefined,
     maxOp: c.maxOp as '<' | '<=' | undefined,
     dateTimeMode: c.enableDate === false ? 'hora' : c.enableTime === false ? 'fecha' : undefined,
-    dateFormat: rawType === 'datetime' ? (typeof c.format === 'string' ? c.format.split(' ')[0] : undefined) : undefined,
-    timeFormat: (rawType === 'datetime' || rawType === 'time')
-      ? (typeof c.format === 'string' ? c.format.split(' ').slice(1).join(' ') || (rawType === 'time' ? c.format as string : undefined) : undefined)
-      : undefined,
+    ...partesFormatoFechaHora(rawType, c),
     custom: c.custom as string | undefined,
     calculateValue: c.calculateValue as string | undefined,
     idEstrategiaFirma: c.idEstrategiaFirma as number | undefined,
