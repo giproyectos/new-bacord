@@ -12,6 +12,7 @@ export function CentrosList() {
   const [form, setForm]       = useState(EMPTY)
   const [warn, setWarn]       = useState<Centro | null>(null)
   const [err, setErr]         = useState('')
+  const [errEliminar, setErrEliminar] = useState('')
 
   const cargar = () => centrosApi.listar().then(setCentros).finally(() => setLoading(false))
   useEffect(() => { cargar() }, [])
@@ -29,18 +30,26 @@ export function CentrosList() {
     if (!form.descripcion.trim()) { setErr('El nombre es requerido'); return }
 
     const data = { codigo: form.codigo.trim().toUpperCase(), descripcion: form.descripcion.trim(), direccion: form.direccion.trim() || undefined }
-    const res = modal?.mode === 'crear'
-      ? await centrosApi.crear(data)
-      : await centrosApi.actualizar(modal!.item!.id, data)
-    if (!res.estado) { setErr(res.mensaje); return }
-    setModal(null)
-    cargar()
+    try {
+      const res = modal?.mode === 'crear'
+        ? await centrosApi.crear(data)
+        : await centrosApi.actualizar(modal!.item!.id, data)
+      if (!res.estado) { setErr(res.mensaje); return }
+      setModal(null)
+      cargar()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Error inesperado al guardar el centro')
+    }
   }
 
   const doEliminar = async (c: Centro) => {
-    await centrosApi.eliminar(c.id)
-    setWarn(null)
-    cargar()
+    try {
+      await centrosApi.eliminar(c.id)
+      setWarn(null)
+      cargar()
+    } catch (e) {
+      setErrEliminar(e instanceof Error ? e.message : 'Error inesperado al desactivar el centro')
+    }
   }
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}><i className="fa fa-spinner fa-spin" /></div>
@@ -112,7 +121,7 @@ export function CentrosList() {
               <div style={{ padding:'8px 14px', borderTop:'1px solid var(--hair)', display:'flex', alignItems:'center', justifyContent:'flex-end', background:'var(--paper-2)' }}>
                 <div style={{ display:'flex', gap:2 }}>
                   <button className="cn-icn" title="Editar" onClick={() => openEditar(c)}><i className="fa fa-pencil-alt" /></button>
-                  <button className="cn-icn del" title="Eliminar" onClick={() => setWarn(c)}><i className="fa fa-trash-alt" /></button>
+                  <button className="cn-icn del" title="Eliminar" onClick={() => { setWarn(c); setErrEliminar('') }}><i className="fa fa-trash-alt" /></button>
                 </div>
               </div>
             )}
@@ -203,7 +212,7 @@ export function CentrosList() {
       {/* Confirmar eliminar */}
       {warn && (
         <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(10,21,48,.45)', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}
-          onClick={() => setWarn(null)}>
+          onClick={() => { setWarn(null); setErrEliminar('') }}>
           <div style={{ background:'var(--paper)', borderRadius:'var(--r-xl)', boxShadow:'var(--sh-3)', width:'100%', maxWidth:400 }}
             onClick={e => e.stopPropagation()}>
             <div style={{ padding:'22px 22px 14px', display:'flex', gap:14, alignItems:'flex-start' }}>
@@ -215,10 +224,15 @@ export function CentrosList() {
                 <div style={{ fontSize:13, color:'var(--ink-3)', lineHeight:1.5 }}>
                   ¿Desactivar <strong>{warn.descripcion}</strong>? Dejará de estar disponible para nuevos registros.
                 </div>
+                {errEliminar && (
+                  <div style={{ marginTop:10, padding:'8px 12px', background:'#FEF2F2', border:'1.5px solid #FECACA', borderRadius:'var(--r-sm)', fontSize:12.5, color:'#B91C1C', display:'flex', alignItems:'center', gap:7 }}>
+                    <i className="fa fa-exclamation-circle" /> {errEliminar}
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ padding:'14px 22px', borderTop:'1px solid var(--hair)', display:'flex', justifyContent:'flex-end', gap:8 }}>
-              <button className="btn btn-gray" onClick={() => setWarn(null)}><i className="fa fa-undo" /> Cancelar</button>
+              <button className="btn btn-gray" onClick={() => { setWarn(null); setErrEliminar('') }}><i className="fa fa-undo" /> Cancelar</button>
               <button className="btn btn-danger" onClick={() => doEliminar(warn)}><i className="fa fa-trash-alt" /> Desactivar</button>
             </div>
           </div>
