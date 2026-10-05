@@ -57,18 +57,18 @@ export function OrdenProcesoDetalle() {
     }).finally(() => setLoading(false))
   }, [id])
 
-  // Crea FC + envía (crea BR) en un solo paso y navega directo al BR
-  const iniciarBatchRecord = async () => {
+  // Solo crea la Fórmula de Control (En Tratamiento) y lleva a su detalle, donde se revisa y se
+  // envía a producción. Enviar aquí de una vez saltaba esa revisión, y una FC enviada ya no se
+  // puede cancelar.
+  const crearFormulaControl = async () => {
     if (!op) return
     setIniciando(true)
     setError('')
     try {
-      let fc = fcExistente
-      if (!fc) fc = await formulaControlApi.crear(op.idOrdenProceso)
-      const br = await formulaControlApi.enviar(fc.idFormulaControl)
-      navigate(`/batch-records/${br.idBatchRecord}/editar`)
+      const fc = await formulaControlApi.crear(op.idOrdenProceso)
+      navigate(`/formulas-control/${fc.idFormulaControl}`)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error al iniciar el Batch Record')
+      setError(e instanceof Error ? e.message : 'Error al crear la Fórmula de Control')
       setIniciando(false)
     }
   }
@@ -278,19 +278,19 @@ export function OrdenProcesoDetalle() {
                   <>
                     <div style={{ fontSize: 13, color: '#64748B', marginBottom: 16, lineHeight: 1.6 }}>
                       {receta
-                        ? 'Esta orden está lista para iniciar producción.'
-                        : 'Se requiere una Receta Maestra vinculada antes de iniciar.'}
+                        ? 'Esta orden está lista. Crea su Fórmula de Control para revisarla antes de enviarla a producción.'
+                        : 'Se requiere una Receta Maestra vinculada antes de crear la Fórmula de Control.'}
                     </div>
                     <button
                       className="btn btn-primary"
-                      onClick={iniciarBatchRecord}
+                      onClick={crearFormulaControl}
                       disabled={!receta || iniciando || !puedeEditarFC}
                       title={!puedeEditarFC ? 'No tiene permiso de edición en Fórmulas de Control' : !receta ? 'Requiere Receta Maestra vinculada' : ''}
                       style={{ fontSize: 13, padding: '9px 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
                     >
                       {iniciando
-                        ? <><i className="fa fa-spinner fa-spin" /> Iniciando...</>
-                        : <><i className="fa fa-play" /> Iniciar Batch Record</>}
+                        ? <><i className="fa fa-spinner fa-spin" /> Creando...</>
+                        : <><i className="fa fa-vials" /> Crear Fórmula de Control</>}
                     </button>
                   </>
                 )}
