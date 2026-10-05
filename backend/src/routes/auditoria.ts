@@ -1,22 +1,33 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
+import { requireModulo } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ForbiddenError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { actorDe } from '../services/audit.js'
 
 export const auditoriaRouter = Router()
 
-// Se deja sin gate de módulo (solo requireAuth): el registro (POST) lo disparan flujos de
-// otros módulos y nunca debe fallar por permisos, y la consulta (GET) también se usa de forma
-// acotada por idEntidad desde dentro de Batch Record (panel de auditoría embebido), no solo
-// desde la pantalla de Consulta de Auditoría. El módulo 'auditoria' solo controla si esa
-// pantalla aparece en el menú.
+// El router se monta solo con requireAuth (sin gate de módulo): el registro (POST) lo disparan
+// flujos de otros módulos y nunca debe fallar por permisos. La consulta (GET) sí necesita
+// distinguir dos usos muy distintos — ver el gate inline dentro de ese handler.
 const LIMITE_POR_DEFECTO = 500
 const LIMITE_MAXIMO = 5000
 
 auditoriaRouter.get(
   '/',
+  asyncHandler(async (req, res, next) => {
+    const { entidad, idEntidad, limite } = req.query
+    // Acotada por idEntidad: es el panel de auditoría embebido en un Batch Record puntual
+    // (BatchRecordList/EditarBatchRecord) — cualquier usuario autenticado que ya puede ver ese
+    // registro puede ver su historial. Sin idEntidad es un volcado general (hasta 5000 filas de
+    // todo el sistema, incluyendo altas/bajas de Usuarios y Roles) — eso sí requiere el módulo
+    // 'auditoria', igual que cualquier otra pantalla de consulta del sistema.
+    if (!(typeof idEntidad === 'string' && idEntidad)) {
+      return requireModulo('auditoria')(req, res, next)
+    }
+    next()
+  }),
   asyncHandler(async (req, res) => {
     const { entidad, idEntidad, limite } = req.query
     const where: Record<string, unknown> = {}
