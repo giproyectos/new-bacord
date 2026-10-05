@@ -5,6 +5,7 @@ import { requireModulo } from '../middleware/auth.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { ForbiddenError, NotFoundError, ValidationError } from '../utils/errors.js'
 import { actorDe } from '../services/audit.js'
+import { ENTIDADES_DE_BR } from '../constants/auditoria.js'
 
 export const auditoriaRouter = Router()
 
@@ -17,22 +18,32 @@ const LIMITE_MAXIMO = 5000
 auditoriaRouter.get(
   '/',
   asyncHandler(async (req, res, next) => {
-    const { entidad, idEntidad, limite } = req.query
-    // Acotada por idEntidad: es el panel de auditoría embebido en un Batch Record puntual
-    // (BatchRecordList/EditarBatchRecord) — cualquier usuario autenticado que ya puede ver ese
-    // registro puede ver su historial. Sin idEntidad es un volcado general (hasta 5000 filas de
-    // todo el sistema, incluyendo altas/bajas de Usuarios y Roles) — eso sí requiere el módulo
-    // 'auditoria', igual que cualquier otra pantalla de consulta del sistema.
-    if (!(typeof idEntidad === 'string' && idEntidad)) {
-      return requireModulo('auditoria')(req, res, next)
+    const { entidad, idEntidad } = req.query
+    const idQ = typeof idEntidad === 'string' && idEntidad ? idEntidad : undefined
+    const entidadQ = typeof entidad === 'string' && entidad ? entidad : undefined
+    // Volcado general (sin idEntidad): hasta 5000 filas de todo el sistema — requiere el módulo
+    // 'auditoria', igual que cualquier pantalla de consulta.
+    if (!idQ) return requireModulo('auditoria')(req, res, next)
+    // Historial de un registro de Batch Record puntual (panel embebido): idEntidad es un
+    // idBatchRecord, así que basta con poder abrir Batch Records — el mismo control con que la
+    // app protege esas pantallas (ver app.ts).
+    if (!entidadQ || ENTIDADES_DE_BR.includes(entidadQ)) {
+      return requireModulo('batch-records')(req, res, next)
     }
-    next()
+    // Cualquier otra entidad (p. ej. Sesion, cuyo idEntidad es un idUsuario) es información de
+    // administración general — requiere el módulo 'auditoria'.
+    return requireModulo('auditoria')(req, res, next)
   }),
   asyncHandler(async (req, res) => {
     const { entidad, idEntidad, limite } = req.query
     const where: Record<string, unknown> = {}
     if (typeof entidad === 'string' && entidad) where.entidad = entidad
-    if (typeof idEntidad === 'string' && idEntidad) where.idEntidad = idEntidad
+    // Sin `entidad` explícita, un idEntidad solo puede traer entidades de Batch Record: un
+    // número como idUsuario coincide también con Sesion, y eso no debe salir por esta vía.
+    if (typeof idEntidad === 'string' && idEntidad) {
+      where.idEntidad = idEntidad
+      if (!where.entidad) where.entidad = { in: [...ENTIDADES_DE_BR] }
+    }
     // La pantalla de Consulta de Auditoría trae todo el historial (sin `entidad`/`idEntidad`) para
     // filtrar y resumir del lado del cliente — con un límite fijo de 500, un historial más largo
     // que eso quedaba invisible en pantalla sin ningún aviso, aunque los datos seguían intactos

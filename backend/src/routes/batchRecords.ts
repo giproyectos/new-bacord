@@ -15,7 +15,7 @@ export const batchRecordsRouter = Router()
 // archivo y en desviaciones.ts) — debe coincidir con ENTIDADES_DE_BR en
 // src/features/batch-record/EditarBatchRecord.tsx (frontend), que arma el mismo criterio para
 // el panel de auditoría embebido.
-const ENTIDADES_DE_BR = ['BatchRecord', 'DetalleValores', 'FirmaSeccion', 'FirmaCierre', 'Desviacion']
+import { ENTIDADES_DE_BR } from '../constants/auditoria.js'
 
 // `BatchRecord.fechaModificacion` (@updatedAt) solo cambia cuando el propio registro se
 // actualiza — firmar una sección, guardar un campo del formulario o cerrar una etapa no tocan
