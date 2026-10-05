@@ -309,6 +309,9 @@ model CargueRegistro {
   totalComponentes  Int
   errores           Int
   estado            String // 'Exitoso' | 'Con errores' | 'Fallido'
+  // JSON [{ numeroOrdenProceso, motivo }] — detalle de qué orden falló y por qué, para poder
+  // diagnosticar un cargue parcialmente fallido sin tener que adivinarlo del archivo original.
+  detalleErrores    String?  @db.Text
 }
 
 model CargueMaterialRegistro {

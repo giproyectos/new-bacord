@@ -93,6 +93,58 @@ describe('POST /api/ordenes-proceso/cargue — la Receta Maestra debe estar Acti
   })
 })
 
+// Antes, cada fila fallida del cargue se reducía a un contador — sin registrar cuál orden falló
+// ni por qué, un cargue parcialmente fallido era imposible de diagnosticar sin adivinar.
+describe('POST /api/ordenes-proceso/cargue — detalleErrores', () => {
+  it('devuelve en la respuesta y guarda en el historial cuál orden falló y por qué', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 1 } })
+
+    const res = await request(app)
+      .post('/api/ordenes-proceso/cargue')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        archivo: 'cargue-detalle.xlsx',
+        ordenes: [payloadOrden(esc, 'OP-SIN-RECETA', 999999)],
+        componentes: [[]],
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.datos.detalleErrores).toEqual([
+      { numeroOrdenProceso: 'OP-SIN-RECETA', motivo: 'La Receta Maestra indicada no existe' },
+    ])
+
+    const historial = await request(app).get('/api/ordenes-proceso/cargues').set('Authorization', `Bearer ${token}`)
+    const registro = historial.body.find((c: { archivo: string }) => c.archivo === 'cargue-detalle.xlsx')
+    expect(registro.detalleErrores).toEqual([
+      { numeroOrdenProceso: 'OP-SIN-RECETA', motivo: 'La Receta Maestra indicada no existe' },
+    ])
+  })
+
+  it('no incluye detalleErrores (arreglo vacío) cuando el cargue no tuvo errores', async () => {
+    const esc = await crearEscenarioBasico()
+    const token = tokenPara(esc.usuarioAdmin)
+    await prisma.recetaMaestra.update({ where: { idRecetaMaestra: esc.recetaMaestra.idRecetaMaestra }, data: { idEstado: 1 } })
+
+    const res = await request(app)
+      .post('/api/ordenes-proceso/cargue')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        archivo: 'cargue-sin-errores.xlsx',
+        ordenes: [payloadOrden(esc, 'OP-CARGUE-LIMPIO', esc.recetaMaestra.idRecetaMaestra)],
+        componentes: [[]],
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.datos.detalleErrores).toEqual([])
+
+    const historial = await request(app).get('/api/ordenes-proceso/cargues').set('Authorization', `Bearer ${token}`)
+    const registro = historial.body.find((c: { archivo: string }) => c.archivo === 'cargue-sin-errores.xlsx')
+    expect(registro.detalleErrores).toEqual([])
+  })
+})
+
 // El formulario de búsqueda de OrdenProcesoList.tsx llamaba a buscar() sin pasarle ningún filtro
 // — estos parámetros existían en el backend pero nunca llegaban a usarse desde la UI.
 describe('GET /api/ordenes-proceso — filtros', () => {
