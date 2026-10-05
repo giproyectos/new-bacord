@@ -25,12 +25,25 @@ const firmaSchema = z.object({
   activo: z.boolean().optional(),
 })
 
+// Sin este chequeo, un idGrupo inexistente llega intacto hasta el `data: parsed.data` de Prisma,
+// que revienta con una violación de llave foránea (P2003) no manejada por errorHandler — el
+// administrador ve un 500 genérico en vez de un mensaje claro. Un idGrupo de un grupo ya
+// desactivado sí satisface la llave foránea y no revienta, pero deja una Firma vinculada a un
+// grupo que ya no puede derogar/firmar nada — la misma regla que ya exige estrategiasFirma.ts
+// para sus propias referencias a Firma/Grupo Responsable.
+async function assertGrupoValido(idGrupo: number | undefined) {
+  if (idGrupo === undefined) return
+  const grupo = await prisma.grupoResponsable.findUnique({ where: { id: idGrupo } })
+  if (!grupo || !grupo.activo) throw new ValidationError('El Grupo responsable indicado no existe o está inactivo')
+}
+
 firmasRouter.post(
   '/',
   requireModuloEditar('firmas'),
   asyncHandler(async (req, res) => {
     const parsed = firmaSchema.safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    await assertGrupoValido(parsed.data.idGrupo)
     const firma = await prisma.$transaction(async (tx) => {
       const creada = await tx.firma.create({ data: parsed.data, include: { grupo: true } })
       await logAudit(tx, {
@@ -49,6 +62,7 @@ firmasRouter.put(
   asyncHandler(async (req, res) => {
     const parsed = firmaSchema.partial().safeParse(req.body)
     if (!parsed.success) throw new ValidationError(parsed.error.message)
+    await assertGrupoValido(parsed.data.idGrupo)
     const id = Number(req.params.id)
     const anterior = await prisma.firma.findUnique({ where: { idFirma: id } })
     if (!anterior) throw new NotFoundError('Firma no encontrada')
