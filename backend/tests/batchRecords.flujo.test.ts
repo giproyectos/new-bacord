@@ -577,3 +577,49 @@ describe('POST /api/batch-records/:id/firmas/:idFirmaRegistro/derogar', () => {
     expect(res.status).toBe(409)
   })
 })
+
+describe('PUT /api/batch-records/:id/detalles/:idDetalle con firma de cierre', () => {
+  // Con firma de cierre el formulario queda bloqueado (igual que en el navegador). Se crea la
+  // firma directamente, sin el flujo que finaliza el lote, para que el lote siga En proceso y la
+  // prueba compruebe esta regla y no la de "lote no está en proceso".
+  async function escenarioConCierre() {
+    const esc = await crearEscenarioBasico()
+    const idDetalle = esc.procesos[0].idDetalle
+    const datosOriginales = JSON.stringify({ peso: 5 })
+    await prisma.batchRecordDetalleData.create({
+      data: { idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle, jsonData: datosOriginales },
+    })
+    await prisma.batchRecordFirma.create({
+      data: { idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle, bloqueKey: '', idFirma: esc.firma.idFirma, idUsuario: esc.usuarioAdmin.idUsuario },
+    })
+    return { esc, idDetalle, datosOriginales }
+  }
+
+  it('rechaza cambiar los datos de un formulario que ya tiene firma de cierre', async () => {
+    const { esc, idDetalle } = await escenarioConCierre()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .put(`/api/batch-records/${esc.batchRecord.idBatchRecord}/detalles/${idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: JSON.stringify({ peso: 7 }) })
+
+    expect(res.status).toBe(409)
+    const guardado = await prisma.batchRecordDetalleData.findUniqueOrThrow({
+      where: { idBatchRecord_idDetalle: { idBatchRecord: esc.batchRecord.idBatchRecord, idDetalle } },
+    })
+    expect(JSON.parse(guardado.jsonData)).toEqual({ peso: 5 })
+  })
+
+  it('acepta reenviar exactamente los mismos datos aunque ya haya firma de cierre', async () => {
+    const { esc, idDetalle, datosOriginales } = await escenarioConCierre()
+    const token = tokenPara(esc.usuarioAdmin)
+
+    const res = await request(app)
+      .put(`/api/batch-records/${esc.batchRecord.idBatchRecord}/detalles/${idDetalle}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ jsonData: datosOriginales })
+
+    expect(res.status).toBe(200)
+  })
+})

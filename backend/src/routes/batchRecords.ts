@@ -280,6 +280,21 @@ batchRecordsRouter.put(
     assertEnProceso(br)
     await assertDetalleEnReceta(br.idRecetaMaestra, idDetalle)
 
+    // Un formulario con firma de cierre queda bloqueado para edición (el navegador ya lo hace con
+    // cierFirmadas > 0). Se permite reenviar exactamente los mismos datos, para no marcar como
+    // error un guardado sin cambios; cualquier cambio real exige derogar la firma antes.
+    const cierreFirmado = await prisma.batchRecordFirma.findFirst({ where: { idBatchRecord, idDetalle, bloqueKey: '' } })
+    if (cierreFirmado) {
+      const guardado = await prisma.batchRecordDetalleData.findUnique({
+        where: { idBatchRecord_idDetalle: { idBatchRecord, idDetalle } },
+      })
+      const sinCambios = guardado !== null &&
+        JSON.stringify(parseJsonDataSeguro(guardado.jsonData)) === JSON.stringify(parseJsonDataSeguro(parsed.data.jsonData))
+      if (!sinCambios) {
+        throw new ConflictError('Este formulario ya tiene una firma de cierre — derogue la firma para modificar sus datos')
+      }
+    }
+
     const detalle = await prisma.detalle.findUnique({ where: { id: idDetalle }, select: { descripcion: true } })
     const anterior = await prisma.batchRecordDetalleData.findUnique({
       where: { idBatchRecord_idDetalle: { idBatchRecord, idDetalle } },
