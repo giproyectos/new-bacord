@@ -22,8 +22,8 @@ interface Props<T> {
   /** `row` es la fila original que se abrió para editar (`undefined` al crear) — úsalo para ubicar
    *  el registro a actualizar en vez de rebuscarlo en `data` por un campo del formulario (ese campo
    *  puede haber cambiado de valor en el propio formulario que se está guardando). */
-  onSave?: (values: Record<string, string>, isEdit: boolean, row?: T) => void
-  onDelete?: (row: T) => void
+  onSave?: (values: Record<string, string>, isEdit: boolean, row?: T) => void | Promise<void>
+  onDelete?: (row: T) => void | Promise<void>
   extraActions?: (row: T) => React.ReactNode
   icon?: string
   description?: string
@@ -40,6 +40,10 @@ export function CatalogPage<T = any>({
   const [values, setValues]   = useState<Record<string, string>>({})
   const [editRow, setEditRow] = useState<T | null>(null)
   const [errors, setErrors]   = useState<Record<string, string>>({})
+  const [saveError, setSaveError] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [guardando, setGuardando] = useState(false)
+  const [eliminando, setEliminando] = useState(false)
   const [search, setSearch]   = useState('')
 
   const entity = panelTitle.replace(/^Lista de /i, '')
@@ -58,6 +62,7 @@ export function CatalogPage<T = any>({
     setValues({})
     setEditRow(null)
     setErrors({})
+    setSaveError('')
     setMode('create')
   }
 
@@ -71,30 +76,52 @@ export function CatalogPage<T = any>({
     setValues(extracted)
     setEditRow(row)
     setErrors({})
+    setSaveError('')
     setMode('edit')
   }
 
   const openDelete = (row: T) => {
     setEditRow(row)
+    setDeleteError('')
     setMode('delete')
   }
 
-  const handleSave = () => {
+  // `onSave`/`onDelete` llaman a la API y pueden rechazar (código duplicado, permisos, etc.) —
+  // antes el modal se cerraba de inmediato sin esperar el resultado, dando la falsa impresión de
+  // que se había guardado aunque el backend hubiera rechazado la operación.
+  const handleSave = async () => {
     const errs: Record<string, string> = {}
     for (const f of fields) {
       if (f.required && !values[f.key]?.trim()) errs[f.key] = 'Campo requerido'
     }
     if (Object.keys(errs).length) { setErrors(errs); return }
-    onSave?.(values, mode === 'edit', editRow ?? undefined)
-    setMode(null)
-    setValues({})
-    setEditRow(null)
+    setGuardando(true)
+    setSaveError('')
+    try {
+      await onSave?.(values, mode === 'edit', editRow ?? undefined)
+      setMode(null)
+      setValues({})
+      setEditRow(null)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Error inesperado al guardar')
+    } finally {
+      setGuardando(false)
+    }
   }
 
-  const handleDelete = () => {
-    if (editRow) onDelete?.(editRow)
-    setMode(null)
-    setEditRow(null)
+  const handleDelete = async () => {
+    if (!editRow) return
+    setEliminando(true)
+    setDeleteError('')
+    try {
+      await onDelete?.(editRow)
+      setMode(null)
+      setEditRow(null)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Error inesperado al eliminar')
+    } finally {
+      setEliminando(false)
+    }
   }
 
   const allColumns: Column<T>[] = [
@@ -126,7 +153,7 @@ export function CatalogPage<T = any>({
       })()
     : ''
 
-  const closeModal = () => { setMode(null); setValues({}); setEditRow(null); setErrors({}) }
+  const closeModal = () => { setMode(null); setValues({}); setEditRow(null); setErrors({}); setSaveError(''); setDeleteError('') }
 
   return (
     <>
@@ -265,12 +292,17 @@ export function CatalogPage<T = any>({
                   )}
                 </div>
               ))}
+              {saveError && (
+                <div className="cp-field-err" style={{ fontSize: 12.5 }}>
+                  <i className="fa fa-exclamation-circle" />{saveError}
+                </div>
+              )}
             </div>
 
             <div className="cp-mfoot">
-              <button className="btn btn-gray" onClick={closeModal}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-primary" onClick={handleSave}>
-                <i className="fa fa-check" /> {mode === 'edit' ? 'Guardar cambios' : 'Crear'}
+              <button className="btn btn-gray" onClick={closeModal} disabled={guardando}><i className="fa fa-undo" /> Cancelar</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={guardando}>
+                <i className={`fa ${guardando ? 'fa-spinner fa-spin' : 'fa-check'}`} /> {mode === 'edit' ? 'Guardar cambios' : 'Crear'}
               </button>
             </div>
           </div>
@@ -296,11 +328,18 @@ export function CatalogPage<T = any>({
                 <div className="cp-del-msg">
                   Se eliminará <strong>{deleteLabel}</strong> de forma permanente.
                 </div>
+                {deleteError && (
+                  <div className="cp-field-err" style={{ fontSize: 12.5, marginTop: 8 }}>
+                    <i className="fa fa-exclamation-circle" />{deleteError}
+                  </div>
+                )}
               </div>
             </div>
             <div className="cp-mfoot">
-              <button className="btn btn-gray" onClick={closeModal}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-danger" onClick={handleDelete}><i className="fa fa-trash-alt" /> Eliminar</button>
+              <button className="btn btn-gray" onClick={closeModal} disabled={eliminando}><i className="fa fa-undo" /> Cancelar</button>
+              <button className="btn btn-danger" onClick={handleDelete} disabled={eliminando}>
+                <i className={`fa ${eliminando ? 'fa-spinner fa-spin' : 'fa-trash-alt'}`} /> Eliminar
+              </button>
             </div>
           </div>
         </div>
