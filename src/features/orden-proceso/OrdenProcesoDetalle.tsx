@@ -73,20 +73,6 @@ export function OrdenProcesoDetalle() {
     }
   }
 
-  // Envía una FC ya existente (en tratamiento) y navega al BR
-  const activarBatchRecord = async () => {
-    if (!fcExistente) return
-    setIniciando(true)
-    setError('')
-    try {
-      const br = await formulaControlApi.enviar(fcExistente.idFormulaControl)
-      navigate(`/batch-records/${br.idBatchRecord}/editar`)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error al activar el Batch Record')
-      setIniciando(false)
-    }
-  }
-
   if (loading) return (
     <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
       <div style={{ width: 36, height: 36, border: '3px solid #E2E8F0', borderTopColor: '#0A2D63',
@@ -256,22 +242,12 @@ export function OrdenProcesoDetalle() {
                       <span style={{ padding: '2px 8px', background: '#FEF3C7', color: '#92400E',
                         borderRadius: 20, fontSize: 10.5, fontWeight: 700 }}>En tratamiento</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <button
-                        className="btn btn-primary"
-                        onClick={activarBatchRecord}
-                        disabled={iniciando || !puedeEditarFC}
-                        style={{ fontSize: 13, padding: '9px 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
-                      >
-                        {iniciando
-                          ? <><i className="fa fa-spinner fa-spin" /> Iniciando...</>
-                          : <><i className="fa fa-play" /> Iniciar Batch Record</>}
-                      </button>
-                      <Link to={`/formulas-control/${fcExistente!.idFormulaControl}`}
-                        style={{ fontSize: 12, color: '#64748B' }}>
-                        Ver FC <i className="fa fa-external-link-alt" style={{ fontSize: 9 }} />
-                      </Link>
-                    </div>
+                    {/* El envío a producción se hace solo desde el detalle de la FC, donde se revisa. */}
+                    <Link to={`/formulas-control/${fcExistente!.idFormulaControl}`}
+                      className="btn btn-primary"
+                      style={{ fontSize: 13, padding: '9px 20px', display: 'inline-flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
+                      <i className="fa fa-clipboard-check" /> Revisar Fórmula de Control
+                    </Link>
                   </>
                 ) : (
                   /* ── Sin FC ni BR ── */
