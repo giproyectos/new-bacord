@@ -30,8 +30,14 @@ export function RolesList() {
   const setNivel = (clave: string, nivel: Nivel) => {
     setForm(f => ({
       ...f,
-      modulos: nivel === 'ninguno' ? f.modulos.filter(m => m !== clave) : [...f.modulos.filter(m => m !== clave), clave],
-      modulosEdicion: nivel === 'editar' ? [...f.modulosEdicion.filter(m => m !== clave), clave] : f.modulosEdicion.filter(m => m !== clave),
+      // Conserva la posición de cada módulo: cambiar solo el nivel no debe reordenar la lista,
+      // porque el log de auditoría compara listas y lo tomaría por un cambio de módulos.
+      modulos: nivel === 'ninguno'
+        ? f.modulos.filter(m => m !== clave)
+        : f.modulos.includes(clave) ? f.modulos : [...f.modulos, clave],
+      modulosEdicion: nivel === 'editar'
+        ? (f.modulosEdicion.includes(clave) ? f.modulosEdicion : [...f.modulosEdicion, clave])
+        : f.modulosEdicion.filter(m => m !== clave),
     }))
   }
 

@@ -96,13 +96,14 @@ rolesRouter.put(
       })
 
       const cambios: AuditCambio[] = diffObjetos(anterior, rest, ETIQUETAS)
-      const antesModulos = anterior.modulos.split(',').filter(Boolean).join(', ') || '—'
-      const despuesModulos = modulosFinal.join(', ') || '—'
+      // Se comparan como conjuntos ordenados: el orden en que llegan los módulos no es un cambio.
+      const antesModulos = anterior.modulos.split(',').filter(Boolean).sort().join(', ') || '—'
+      const despuesModulos = [...modulosFinal].sort().join(', ') || '—'
       if (antesModulos !== despuesModulos) {
         cambios.push({ campo: 'modulos', etiqueta: 'Módulos (ver)', valorAnterior: antesModulos, valorNuevo: despuesModulos })
       }
-      const antesEdicion = (anterior.modulosEdicion ?? '').split(',').filter(Boolean).join(', ') || '—'
-      const despuesEdicion = modulosEdicionFinal.join(', ') || '—'
+      const antesEdicion = (anterior.modulosEdicion ?? '').split(',').filter(Boolean).sort().join(', ') || '—'
+      const despuesEdicion = [...modulosEdicionFinal].sort().join(', ') || '—'
       if (antesEdicion !== despuesEdicion) {
         cambios.push({ campo: 'modulosEdicion', etiqueta: 'Módulos (editar)', valorAnterior: antesEdicion, valorNuevo: despuesEdicion })
       }

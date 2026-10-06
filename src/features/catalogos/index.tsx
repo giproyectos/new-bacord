@@ -3,6 +3,7 @@ import { CatalogPage } from '@/components/shared/CatalogPage'
 import { materialesApi, TIPO_MATERIAL_LABELS, type Material, type TipoMaterial } from '@/api/materiales'
 import { parametrosApi, type Parametro } from '@/api/parametros'
 import { usePuedeEditar } from '@/hooks/usePermisos'
+import { useAuthStore } from '@/stores/authStore'
 
 // ── Materiales ────────────────────────────────────────────────────────────
 
@@ -92,10 +93,20 @@ export function MaterialesList() {
 
 // ── Parámetros ────────────────────────────────────────────────────────────
 export function ParametrosList() {
+  const esAdmin = useAuthStore((s) => !!s.user?.esAdministrador)
   const [data, setData] = useState<Parametro[]>([])
   const [loading, setLoading] = useState(true)
   const cargar = () => parametrosApi.listar().then(setData).finally(() => setLoading(false))
-  useEffect(() => { cargar() }, [])
+  // Los parámetros son solo para administradores: un no-admin no debe llamar a la API (daría 403
+  // y la pantalla se vería como una lista vacía en vez de explicar por qué no hay datos).
+  useEffect(() => { if (esAdmin) cargar(); else setLoading(false) }, [esAdmin])
+
+  if (!esAdmin) return (
+    <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)', fontSize: 13 }}>
+      <i className="fa fa-lock" style={{ marginRight: 8 }} />
+      Los parámetros del sistema solo puede verlos un administrador.
+    </div>
+  )
 
   return (
     <CatalogPage<Parametro>
