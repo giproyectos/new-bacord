@@ -66,10 +66,18 @@ formulasControlRouter.post(
   })
 )
 
+// La revisión de la FC la hace una persona antes de enviarla a producción: el servidor exige la
+// confirmación, no solo la pantalla, para que la API directa no pueda saltársela.
+const enviarSchema = z.object({
+  revisado: z.literal(true, { errorMap: () => ({ message: 'Debe confirmar la revisión de la Fórmula de Control antes de enviarla' }) }),
+})
+
 formulasControlRouter.post(
   '/:id/enviar',
   requireModuloEditar('formulas-control'),
   asyncHandler(async (req, res) => {
+    const parsed = enviarSchema.safeParse(req.body)
+    if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Revisión no confirmada')
     const idFormulaControl = Number(req.params.id)
     const fc = await prisma.formulaControl.findUnique({ where: { idFormulaControl } })
     if (!fc) throw new NotFoundError('Fórmula de Control no encontrada')
@@ -95,7 +103,10 @@ formulasControlRouter.post(
       await logAudit(tx, {
         entidad: 'FormulaControl', idEntidad: idFormulaControl, descripcionEntidad: `FC-${idFormulaControl}`,
         accion: 'MODIFICAR', modulo: 'formulas-control',
-        cambios: [{ campo: 'idEstado', etiqueta: 'Estado', valorAnterior: 'En Tratamiento', valorNuevo: 'Enviada a Producción' }],
+        cambios: [
+          { campo: 'idEstado', etiqueta: 'Estado', valorAnterior: 'En Tratamiento', valorNuevo: 'Enviada a Producción' },
+          { campo: 'revisado', etiqueta: 'Revisión confirmada', valorAnterior: '—', valorNuevo: 'Sí' },
+        ],
         actor,
       })
       await logAudit(tx, {

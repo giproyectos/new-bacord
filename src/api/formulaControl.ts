@@ -6,8 +6,9 @@ export const formulaControlApi = {
   find: async (id: number): Promise<FormulaControl> => (await http.get<FormulaControl>(`/formulas-control/${id}`)).data,
   crear: async (idOrdenProceso: number): Promise<FormulaControl> =>
     (await http.post<FormulaControl>('/formulas-control', { idOrdenProceso })).data,
+  // `revisado: true` confirma que una persona revisó la FC; el servidor lo exige.
   enviar: async (idFormulaControl: number): Promise<BatchRecord> =>
-    (await http.post<BatchRecord>(`/formulas-control/${idFormulaControl}/enviar`)).data,
+    (await http.post<BatchRecord>(`/formulas-control/${idFormulaControl}/enviar`, { revisado: true })).data,
   cancelar: async (idFormulaControl: number, motivo: string): Promise<void> => {
     await http.post(`/formulas-control/${idFormulaControl}/cancelar`, { motivo })
   },

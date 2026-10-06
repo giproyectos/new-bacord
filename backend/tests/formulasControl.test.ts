@@ -44,6 +44,7 @@ describe('POST /api/formulas-control/:id/cancelar — validación de estado', ()
     const resEnviar = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/enviar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ revisado: true })
     expect(resEnviar.status).toBe(200)
     const idBatchRecord = resEnviar.body.idBatchRecord
 
@@ -166,10 +167,36 @@ describe('Fórmula de Control — receta debe estar Activa', () => {
     const res = await request(app)
       .post(`/api/formulas-control/${idFormulaControl}/enviar`)
       .set('Authorization', `Bearer ${token}`)
+      .send({ revisado: true })
     expect(res.status).toBe(409)
 
     const fc = await prisma.formulaControl.findUniqueOrThrow({ where: { idFormulaControl } })
     expect(fc.idEstado).toBe(1) // sigue En Tratamiento, no avanzó
+    const br = await prisma.batchRecord.findFirst({ where: { idFormulaControl } })
+    expect(br).toBeNull()
+  })
+
+  it('rechaza enviar a producción sin confirmar la revisión, aunque la FC sea válida', async () => {
+    const orden = await crearOrdenPropia(esc, 'OP-FC-TEST-SIN-REVISION')
+    const resCrear = await request(app)
+      .post('/api/formulas-control')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ idOrdenProceso: orden.idOrdenProceso })
+    const idFormulaControl = resCrear.body.idFormulaControl
+
+    const sinConfirmar = await request(app)
+      .post(`/api/formulas-control/${idFormulaControl}/enviar`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ revisado: false })
+    expect(sinConfirmar.status).toBe(400)
+
+    const sinCuerpo = await request(app)
+      .post(`/api/formulas-control/${idFormulaControl}/enviar`)
+      .set('Authorization', `Bearer ${token}`)
+    expect(sinCuerpo.status).toBe(400)
+
+    const fc = await prisma.formulaControl.findUniqueOrThrow({ where: { idFormulaControl } })
+    expect(fc.idEstado).toBe(1) // sigue En Tratamiento
     const br = await prisma.batchRecord.findFirst({ where: { idFormulaControl } })
     expect(br).toBeNull()
   })

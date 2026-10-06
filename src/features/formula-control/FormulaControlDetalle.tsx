@@ -28,6 +28,7 @@ export function FormulaControlDetalle() {
   const [accion, setAccion] = useState<'enviar' | 'cancelar' | null>(null)
   const [procesando, setProcesando] = useState(false)
   const [motivoCancelar, setMotivoCancelar] = useState('')
+  const [revisado, setRevisado] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export function FormulaControlDetalle() {
   const ejecutar = async () => {
     if (!fc || !accion) return
     if (accion === 'cancelar' && !motivoCancelar.trim()) return
+    if (accion === 'enviar' && !revisado) return
     setProcesando(true)
     setError('')
     try {
@@ -139,7 +141,7 @@ export function FormulaControlDetalle() {
                   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <i className="fa fa-times-circle" /> Cancelar FC
               </button>
-              <button onClick={() => { setAccion('enviar'); setError('') }}
+              <button onClick={() => { setAccion('enviar'); setRevisado(false); setError('') }}
                 style={{ background: '#2D5D4A', border: '1px solid #1E4535',
                   borderRadius: 8, padding: '8px 18px', color: '#fff', fontSize: 12.5,
                   cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -285,6 +287,15 @@ export function FormulaControlDetalle() {
                   Se creará un <strong>Batch Record</strong> vinculado a la FC-{fc.idFormulaControl}.
                   Los datos de la Orden de Proceso y sus componentes quedarán disponibles para pre-llenar
                   los campos de los formularios que el administrador haya configurado con mapeo automático.
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 16, padding: '12px 14px',
+                    background: '#F8FAFC', border: '1.5px solid #CBD5E1', borderRadius: 8, cursor: 'pointer', color: '#0A1530' }}>
+                    <input type="checkbox" checked={revisado} onChange={e => setRevisado(e.target.checked)}
+                      disabled={procesando} style={{ marginTop: 3 }} />
+                    <span>
+                      Revisé los datos de la orden (lote, cantidad, fechas, registro sanitario, centro) y los
+                      componentes contra el documento de lote, y son correctos.
+                    </span>
+                  </label>
                 </>
               ) : (
                 <>
@@ -317,7 +328,7 @@ export function FormulaControlDetalle() {
               </button>
               <button
                 className={`btn ${accion === 'cancelar' ? 'btn-danger' : 'btn-primary'}`}
-                onClick={ejecutar} disabled={procesando || (accion === 'cancelar' && !motivoCancelar.trim())}>
+                onClick={ejecutar} disabled={procesando || (accion === 'cancelar' && !motivoCancelar.trim()) || (accion === 'enviar' && !revisado)}>
                 {procesando
                   ? <><i className="fa fa-spinner fa-spin" /> Procesando...</>
                   : accion === 'enviar'
