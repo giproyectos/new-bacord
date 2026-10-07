@@ -170,14 +170,34 @@ function extractFieldLabels(schema: string): Record<string, string> {
 }
 
 // ── FirmaStamp ─────────────────────────────────────────────────────────────
-function FirmaStamp({ info }: { info: FirmaInfo }) {
+// El sello y el botón de derogar van en la misma línea, como dos píldoras — no un botón de
+// texto corto al lado de un bloque de cuatro líneas, que quedaba descuadrado. La píldora verde
+// reutiliza el mismo estilo que el "✓ FIRMADO" del encabezado del formulario, más arriba.
+function FirmaStamp({ info, onDerogar }: { info: FirmaInfo; onDerogar?: () => void }) {
   return (
-    <div style={{ textAlign: 'right', lineHeight: 1.4 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end',
-        fontSize: 11, fontWeight: 700, color: 'var(--forest)' }}>
-        <i className="fa fa-check-circle" /> Firmado
+    <div style={{ textAlign: 'right', lineHeight: 1.4, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          fontSize: 10.5, fontWeight: 700, letterSpacing: '0.03em',
+          background: '#D1FAE5', color: '#065F46',
+          padding: '3px 10px', borderRadius: 20, fontFamily: 'var(--f-mono)', whiteSpace: 'nowrap',
+        }}>
+          <i className="fa fa-check-circle" /> FIRMADO
+        </span>
+        {onDerogar && (
+          <button type="button" title="Derogar esta firma" onClick={onDerogar}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 20,
+              padding: '3px 10px', cursor: 'pointer', whiteSpace: 'nowrap',
+              color: '#DC2626', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.02em',
+            }}>
+            <i className="fa fa-undo" style={{ fontSize: 9 }} /> Derogar
+          </button>
+        )}
       </div>
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink-2)', marginTop: 3 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink-2)', marginTop: 5 }}>
         {info.nombre}
       </div>
       <div style={{ fontSize: 10.5, color: 'var(--ink-4)', fontFamily: 'var(--f-mono)', marginTop: 1 }}>
@@ -532,6 +552,12 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
   const onFieldBlurRef = useRef(onFieldBlur)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lockedRef = useRef(false)
+  // El primer render (RENDER_JSON/RENDER_JSON_WITH_DATA, más abajo) necesita saber si el
+  // formulario ya nace bloqueado — p. ej. al reabrir un Batch Record con firma de cierre —, para
+  // pedirlo en ese mismo mensaje. Un LOCK_FORM aparte en ese momento llega casi siempre antes de
+  // que render.html termine de cargar y de escuchar mensajes, así que se pierde: el formulario
+  // queda editable hasta la próxima vez que alguien firme con la página ya abierta.
+  const lockedForSendRef = useRef(locked)
   const getInitialDataRef = useRef(getInitialData)
 
   useEffect(() => { onDataChangeRef.current = onDataChange }, [onDataChange])
@@ -539,6 +565,7 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
   useEffect(() => { getInitialDataRef.current = getInitialData }, [getInitialData])
   useEffect(() => { onFieldFocusRef.current = onFieldFocus }, [onFieldFocus])
   useEffect(() => { onFieldBlurRef.current = onFieldBlur }, [onFieldBlur])
+  useEffect(() => { lockedForSendRef.current = locked }, [locked])
 
   useEffect(() => {
     if (locked && !lockedRef.current) {
@@ -557,6 +584,8 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
     const send = () => {
       const data = getInitialDataRef.current?.() ?? {}
       const hasData = Object.keys(data).length > 0
+      const readOnly = lockedForSendRef.current
+      if (readOnly) lockedRef.current = true // ya nació bloqueado — que el otro efecto no mande un LOCK_FORM de más
       if (hasData) {
         frame.contentWindow?.postMessage({
           type: 'RENDER_JSON_WITH_DATA',
@@ -564,9 +593,10 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
           data: JSON.stringify({ data }),
           lockedKeys: lockedKeys ?? [],
           language,
+          readOnly,
         }, window.location.origin)
       } else {
-        frame.contentWindow?.postMessage({ type: 'RENDER_JSON', value: schema, language }, window.location.origin)
+        frame.contentWindow?.postMessage({ type: 'RENDER_JSON', value: schema, language, readOnly }, window.location.origin)
       }
     }
 
@@ -850,11 +880,12 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   }, [readonly, detalle.id])
 
   const firmasCierre = getFirmasDeEstrategia(detalle)
-  const userGrupos = (user?.grupos ?? '').split(',').map(g => g.trim())
-  const puedeDerogar = !readonly && !!(
-    user?.esAdministrador ||
-    (detalle.estrategiaFirma?.gruposDerogacion?.split(',').filter(Boolean) ?? []).some(g => userGrupos.includes(g))
-  )
+  // Igual que "Firmar": cualquiera con edición puede abrir el modal. Quién puede derogar de
+  // verdad lo decide el servidor con el login y el PIN que se escriban ahí, no con la sesión
+  // del navegador — el mismo patrón pensado para un equipo compartido en planta, donde la
+  // persona que re-autentica (p. ej. alguien de Calidad) no es necesariamente quien tiene la
+  // sesión abierta (p. ej. un operario de Producción).
+  const puedeDerogar = !readonly
 
   const cierFirmadas = firmasCierre.filter(f => !!firmados[`cie:${detalle.id}:${f.idFirma}`]).length
   const allCierDone  = firmasCierre.length > 0 && cierFirmadas === firmasCierre.length
@@ -1204,20 +1235,11 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
                     </div>
                     {firmaInfo
                       ? (
-                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'flex-start' }}>
-                          <FirmaStamp info={firmaInfo} />
-                          {puedeDerogar && onRequestDerogar && (
-                            <button title="Derogar firma"
-                              style={{
-                                marginTop: 2, background: '#FEF2F2', border: '1px solid #FECACA',
-                                borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
-                                color: '#DC2626', fontSize: 11, flexShrink: 0,
-                              }}
-                              onClick={() => onRequestDerogar(firmaKey, detalle.id, firmaInfo, firma.texto, firma.firma.grupo.nombre)}>
-                              <i className="fa fa-undo" />
-                            </button>
-                          )}
-                        </div>
+                        <FirmaStamp info={firmaInfo} onDerogar={
+                          puedeDerogar && onRequestDerogar
+                            ? () => onRequestDerogar(firmaKey, detalle.id, firmaInfo, firma.texto, firma.firma.grupo.nombre)
+                            : undefined
+                        } />
                       )
                       : (!readonly && !bloq && (
                           <button className="btn btn-warning" style={{ fontSize: 12, flexShrink: 0 }}

@@ -644,10 +644,15 @@ ${brSections}
       key: 'acciones', header: '', width: '104px', align: 'center',
       render: r => (
         <div className="dt-act" onClick={e => e.stopPropagation()}>
-          {r.idEstado === 1 && (
+          {/* Finalizado (2) sigue necesitando esta pantalla — ahí viven liberar, derogar e
+              imprimir. Sin esto, un lote Finalizado solo tenía el ícono de "Ver detalle"
+              (de solo lectura) para llegar a él desde la lista, dejándolo sin forma de
+              gestionarse salvo escribiendo la URL a mano. Cancelado (3) y Liberado (4) sí son
+              terminales — ahí no queda ninguna acción por hacer. */}
+          {(r.idEstado === 1 || r.idEstado === 2) && (
             <button
               className="dt-ab dt-ab-edit"
-              title="Editar registro"
+              title={r.idEstado === 2 ? 'Gestionar (liberar, derogar, imprimir)' : 'Editar registro'}
               aria-label={`Editar BR-${r.idBatchRecord}`}
               onClick={() => navigate(`/batch-records/${r.idBatchRecord}/editar`)}
             >

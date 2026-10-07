@@ -1216,7 +1216,13 @@
             notifyHeight(); return;
           }
           if (e.data.language) currentLanguage = e.data.language;
-          try { createForm(JSON.parse(e.data.value), null, null); }
+          // `readOnly` llega en el mismo mensaje cuando el padre ya sabe, desde antes de que
+          // este iframe termine de cargar, que el formulario debe nacer bloqueado (p. ej. al
+          // reabrir un Batch Record con una firma de cierre ya registrada). Antes ese bloqueo
+          // llegaba como un LOCK_FORM aparte, mandado apenas el componente de React se montaba
+          // — casi siempre antes de que este listener existiera — así que el mensaje se perdía
+          // y el formulario quedaba editable hasta la próxima vez que alguien firmara en vivo.
+          try { createForm(JSON.parse(e.data.value), null, e.data.readOnly ? { readOnly: true } : null); }
           catch(err) { console.error('RENDER_JSON parse error', err); }
         }
         if (e.data.type === 'RENDER_JSON_WITH_DATA') {
@@ -1229,7 +1235,7 @@
           try {
             var schema = JSON.parse(e.data.value);
             lockOpMappedFields(schema, e.data.lockedKeys || []);
-            createForm(schema, JSON.parse(e.data.data), null);
+            createForm(schema, JSON.parse(e.data.data), e.data.readOnly ? { readOnly: true } : null);
           }
           catch(err) { console.error('RENDER_JSON_WITH_DATA parse error', err); }
         }

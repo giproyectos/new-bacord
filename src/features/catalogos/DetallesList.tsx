@@ -394,7 +394,11 @@ function compToJson(c: FormComp): Record<string, unknown> {
     if (c.type === 'time') {
       const tf = c.timeFormat ?? TIME_FORMATS[0].v
       b.format = tf
-      b.widget = { ...(typeof b.widget === 'object' && b.widget ? b.widget as object : {}), time_24hr: tf === 'HH:mm' }
+      // Sin 'type: calendar' explícito, form.io renderiza este componente como el <input
+      // type="time"> nativo del navegador — un control aparte del selector (flatpickr) que usan
+      // 'datetime'/'day', que ignora por completo el formato de 12/24h elegido acá y no deja
+      // escribir una hora con el formato configurado.
+      b.widget = { ...(typeof b.widget === 'object' && b.widget ? b.widget as object : {}), type: 'calendar', time_24hr: tf === 'HH:mm' }
     }
     if (c.type === 'pdf') {
       // Modo 'operario' (default): lo sube quien diligencia el Batch Record. El modo 'diseno'
