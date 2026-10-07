@@ -1,6 +1,7 @@
 import { http } from './http'
 import { authApi } from './auth'
 import type { BatchRecord, BusquedaBatchRecord, PreLlenadoBR, Resultado } from '@/types'
+import type { Material } from './materiales'
 
 export interface BatchRecordDetalleData {
   id: number
@@ -84,6 +85,12 @@ export interface FiltroResumenBR { idCentro?: number; dias?: number }
 export const batchRecordApi = {
   buscar: async (f?: BusquedaBatchRecord): Promise<BatchRecord[]> =>
     (await http.get<BatchRecord[]>('/batch-records', { params: f })).data,
+
+  // Mismo catálogo que /materiales, pero con el módulo de Batch Records: un operario que llena
+  // el lote no necesariamente tiene acceso al módulo de Materiales, y lo necesita solo para
+  // resolver los selectores del formulario (ver injectMaterialOptions).
+  materialesDisponibles: async (): Promise<Material[]> =>
+    (await http.get<Material[]>('/batch-records/materiales-disponibles')).data,
 
   // Agregados (conteos por estado/material, tiempo de ciclo, últimos 6) calculados en el
   // servidor — para el Dashboard, que no necesita el historial completo de Batch Records para

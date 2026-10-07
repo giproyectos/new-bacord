@@ -12,6 +12,14 @@ export interface AuthTokenPayload {
   modulos: string
   /** CSV de claves de módulo (subconjunto de `modulos`) con permiso de edición. Ignorado si esAdministrador. */
   modulosEdicion: string
+  /**
+   * Centro e IDs de Grupo Responsable del usuario — no viajan en el JWT firmado (quedan sin
+   * valor en signToken), `requireAuth` los llena en cada solicitud desde la base. Se usan para
+   * acotar qué Batch Records puede ver/editar un no-administrador (ver accesoBatchRecord.ts):
+   * su mismo Centro, y al menos un Grupo en común con alguna firma de la receta del lote.
+   */
+  idCentro?: number | null
+  grupos?: number[]
 }
 
 declare global {
@@ -63,8 +71,9 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     const usuario = await prisma.usuario.findUnique({
       where: { idUsuario: payload.idUsuario },
       select: {
-        login: true, activo: true, bloqueado: true, esAdministrador: true,
+        login: true, activo: true, bloqueado: true, esAdministrador: true, idCentro: true,
         rol: { select: { activo: true, modulos: true, modulosEdicion: true } },
+        grupos: { select: { idGrupo: true } },
       },
     })
     if (!usuario || !usuario.activo || usuario.bloqueado) {
@@ -76,6 +85,8 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       esAdministrador: usuario.esAdministrador,
       modulos: modulosDe(usuario).join(','),
       modulosEdicion: modulosEdicionDe(usuario).join(','),
+      idCentro: usuario.idCentro,
+      grupos: usuario.grupos.map((g) => g.idGrupo),
     }
     next()
   } catch (err) {

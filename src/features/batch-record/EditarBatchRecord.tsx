@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, EyeOff } from '
 import { useAuthStore } from '@/stores/authStore'
 import { batchRecordApi, type EstructuraDetalle, type EstructuraFirmaItem, type BatchRecordFirmaRegistrada } from '@/api/batchRecord'
 import { recetaMaestraApi } from '@/api/recetaMaestra'
-import { materialesApi, type Material } from '@/api/materiales'
+import type { Material } from '@/api/materiales'
 import { desviacionesApi, type Desviacion } from '@/api/desviaciones'
 import { auditoriaApi } from '@/api/auditoria'
 import type { PreLlenadoBR, BatchRecord, RecetaMaestra } from '@/types'
@@ -1730,6 +1730,7 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const soloLectura = readonly || !puedeEditar
 
   const [loading, setLoading] = useState(true)
+  const [cargaError, setCargaError] = useState('')
   const [br, setBr] = useState<BatchRecord | null>(null)
   const [receta, setReceta] = useState<RecetaMaestra | null>(null)
   const [preLlenado, setPreLlenado] = useState<PreLlenadoBR | null>(null)
@@ -1749,39 +1750,48 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
   const cargarTodo = useCallback(async () => {
     if (!idNum) return
     setAuditVersion(v => v + 1)
-    const brData = await batchRecordApi.find(idNum)
-    setBr(brData)
-    const [pl, est, datos, firmasData, cierres, lib, desvs, rec, mats] = await Promise.all([
-      batchRecordApi.getPreLlenado(idNum),
-      batchRecordApi.getEstructura(idNum),
-      batchRecordApi.getDetalles(idNum),
-      batchRecordApi.getFirmas(idNum),
-      batchRecordApi.getProcesosCerrados(idNum),
-      batchRecordApi.getLiberacion(idNum),
-      desviacionesApi.listar(idNum),
-      recetaMaestraApi.find(brData.idRecetaMaestra).catch(() => null),
-      materialesApi.listar(),
-    ])
-    setPreLlenado(pl)
-    setReceta(rec)
-    setMateriales(mats)
-    setEstructura(est.map(ep => ({ id: ep.idProceso, codigo: ep.proceso.codigo, descripcion: ep.proceso.descripcion, orden: ep.orden })))
-    const detalles: DetalleRow[] = est.flatMap(ep => ep.detalles.map(d => ({ ...d.detalle, idProceso: ep.idProceso, orden: d.orden })))
-    setDetalleStruct(detalles)
-    setDetalleDatos(Object.fromEntries(datos.map(d => {
-      try { return [d.idDetalle, JSON.parse(d.jsonData) as Record<string, unknown>] } catch { return [d.idDetalle, {}] }
-    })))
-    setFirmas(firmasData)
-    setProcesosCerrados(new Set(cierres.map(c => c.idProceso)))
-    setLiberacion(lib ? {
-      nombre: `${lib.usuario.nombres} ${lib.usuario.apellidos}`,
-      grupo: lib.usuario.login,
-      fecha: new Date(lib.liberadoEn).toISOString().slice(0, 10),
-      hora: new Date(lib.liberadoEn).toTimeString().slice(0, 5),
-    } : null)
-    setDesviaciones(desvs)
-    setProcesoActivo(prev => prev ?? est[0]?.idProceso ?? null)
-    setLoading(false)
+    setCargaError('')
+    try {
+      const brData = await batchRecordApi.find(idNum)
+      setBr(brData)
+      const [pl, est, datos, firmasData, cierres, lib, desvs, rec, mats] = await Promise.all([
+        batchRecordApi.getPreLlenado(idNum),
+        batchRecordApi.getEstructura(idNum),
+        batchRecordApi.getDetalles(idNum),
+        batchRecordApi.getFirmas(idNum),
+        batchRecordApi.getProcesosCerrados(idNum),
+        batchRecordApi.getLiberacion(idNum),
+        desviacionesApi.listar(idNum),
+        recetaMaestraApi.find(brData.idRecetaMaestra).catch(() => null),
+        batchRecordApi.materialesDisponibles(),
+      ])
+      setPreLlenado(pl)
+      setReceta(rec)
+      setMateriales(mats)
+      setEstructura(est.map(ep => ({ id: ep.idProceso, codigo: ep.proceso.codigo, descripcion: ep.proceso.descripcion, orden: ep.orden })))
+      const detalles: DetalleRow[] = est.flatMap(ep => ep.detalles.map(d => ({ ...d.detalle, idProceso: ep.idProceso, orden: d.orden })))
+      setDetalleStruct(detalles)
+      setDetalleDatos(Object.fromEntries(datos.map(d => {
+        try { return [d.idDetalle, JSON.parse(d.jsonData) as Record<string, unknown>] } catch { return [d.idDetalle, {}] }
+      })))
+      setFirmas(firmasData)
+      setProcesosCerrados(new Set(cierres.map(c => c.idProceso)))
+      setLiberacion(lib ? {
+        nombre: `${lib.usuario.nombres} ${lib.usuario.apellidos}`,
+        grupo: lib.usuario.login,
+        fecha: new Date(lib.liberadoEn).toISOString().slice(0, 10),
+        hora: new Date(lib.liberadoEn).toTimeString().slice(0, 5),
+      } : null)
+      setDesviaciones(desvs)
+      setProcesoActivo(prev => prev ?? est[0]?.idProceso ?? null)
+    } catch (err) {
+      // Antes, cualquier falla en una de estas llamadas (p. ej. un 403 de un módulo que el Rol
+      // no tiene) dejaba el spinner girando para siempre: el error quedaba como una promesa
+      // rechazada sin manejar y `setLoading(false)` nunca se alcanzaba a ejecutar.
+      setCargaError(err instanceof Error ? err.message : 'No se pudo cargar el Batch Record')
+    } finally {
+      setLoading(false)
+    }
   }, [idNum])
 
   useEffect(() => { cargarTodo() }, [cargarTodo])
@@ -2288,6 +2298,15 @@ ${procsSections}
 
 </body></html>`)
     win.document.close()
+  }
+
+  if (cargaError) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: '#B91C1C' }}>
+        <i className="fa fa-exclamation-triangle" style={{ fontSize: 20, marginBottom: 10, display: 'block' }} />
+        {cargaError}
+      </div>
+    )
   }
 
   if (loading || !br) {

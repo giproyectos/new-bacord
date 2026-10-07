@@ -1,4 +1,4 @@
-import { Router } from 'express'
+import { Router, type Request } from 'express'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
@@ -8,8 +8,28 @@ import { getEstructuraProcesos, recomputePorcentajeAvance } from '../services/ba
 import { logAudit, actorDe, type AuditCambio } from '../services/audit.js'
 import { findFirmaSeccionEstrategia, limitesNumericos, valoresFueraDeRango } from '../services/formioSchema.js'
 import { verificarPin } from '../services/pin.js'
+import { gruposDeReceta, puedeAccederBatchRecord } from '../services/accesoBatchRecord.js'
 
 export const batchRecordsRouter = Router()
+
+// Corre antes de cualquier ruta de este router que tenga `:id` — todas usan ese nombre para el
+// idBatchRecord. Centraliza el control de acceso por Centro + Grupo Responsable (ver
+// accesoBatchRecord.ts) en un solo lugar, en vez de repetirlo en cada handler. Un id que no
+// resuelve a un Batch Record no se bloquea aquí — se deja pasar para que la propia ruta
+// responda su 404 con el mensaje que ya tiene.
+batchRecordsRouter.param('id', asyncHandler(async (req, _res, next) => {
+  const idBatchRecord = Number(req.params.id)
+  if (!Number.isInteger(idBatchRecord)) return next()
+  const br = await prisma.batchRecord.findUnique({
+    where: { idBatchRecord }, select: { idCentro: true, idRecetaMaestra: true },
+  })
+  if (!br) return next()
+  const grupos = await gruposDeReceta(prisma, br.idRecetaMaestra)
+  if (!puedeAccederBatchRecord(req.auth!, br, grupos)) {
+    return next(new ForbiddenError('No tiene acceso a este Batch Record'))
+  }
+  next()
+}))
 
 // Las únicas entidades de auditoría cuyo idEntidad es un idBatchRecord (ver logAudit en este
 // archivo y en desviaciones.ts) — debe coincidir con ENTIDADES_DE_BR en
@@ -70,6 +90,24 @@ async function actividadRecienteDeBR(idCentro: number | undefined, take = 8) {
   }))
 }
 
+// Filtra una lista de Batch Records por Grupo Responsable, calculando los grupos de cada receta
+// una sola vez aunque varios lotes la compartan (ver gruposDeReceta en accesoBatchRecord.ts).
+async function filtrarPorGrupo<T extends { idRecetaMaestra: number }>(
+  auth: NonNullable<Request['auth']>, registros: T[]
+): Promise<T[]> {
+  const cache = new Map<number, Set<number>>()
+  const visibles: T[] = []
+  for (const r of registros) {
+    let grupos = cache.get(r.idRecetaMaestra)
+    if (!grupos) {
+      grupos = await gruposDeReceta(prisma, r.idRecetaMaestra)
+      cache.set(r.idRecetaMaestra, grupos)
+    }
+    if (grupos.size === 0 || (auth.grupos ?? []).some((g) => grupos!.has(g))) visibles.push(r)
+  }
+  return visibles
+}
+
 batchRecordsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -77,12 +115,17 @@ batchRecordsRouter.get(
     const where: Record<string, unknown> = {}
     if (typeof idEstado === 'string' && idEstado) where.idEstado = Number(idEstado)
     if (typeof idCentro === 'string' && idCentro) where.idCentro = Number(idCentro)
+    // Un no-administrador no ve lotes de otro Centro, sin importar lo que pida `idCentro` —
+    // ver accesoBatchRecord.ts. El filtro de Grupo (más fino, por receta) se aplica después de
+    // traer los registros, porque depende de la estructura de cada receta.
+    if (!req.auth!.esAdministrador) where.idCentro = req.auth!.idCentro ?? -1
     const registros = await prisma.batchRecord.findMany({
       where, orderBy: { fechaCreacion: 'desc' },
       include: { ordenProceso: { select: { codigoMaterial: true, descripcionMaterial: true } } },
     })
-    const actividad = await ultimaActividadPorBatchRecord(registros.map((r) => r.idBatchRecord))
-    res.json(registros.map((r) => ({
+    const visibles = req.auth!.esAdministrador ? registros : await filtrarPorGrupo(req.auth!, registros)
+    const actividad = await ultimaActividadPorBatchRecord(visibles.map((r) => r.idBatchRecord))
+    res.json(visibles.map((r) => ({
       ...r,
       ultimaActividad: actividad.get(r.idBatchRecord) ?? r.fechaModificacion,
     })))
@@ -106,7 +149,11 @@ batchRecordsRouter.get(
   '/resumen',
   asyncHandler(async (req, res) => {
     const { idCentro, dias } = req.query
-    const idCentroNum = typeof idCentro === 'string' && idCentro ? Number(idCentro) : undefined
+    // Un no-administrador siempre ve el resumen de su propio Centro — el query param no puede
+    // hacerle ver los números de otra planta.
+    const idCentroNum = req.auth!.esAdministrador
+      ? (typeof idCentro === 'string' && idCentro ? Number(idCentro) : undefined)
+      : (req.auth!.idCentro ?? -1)
     const where: Record<string, unknown> = {}
     if (idCentroNum !== undefined) where.idCentro = idCentroNum
     if (typeof dias === 'string' && dias) {
@@ -159,6 +206,18 @@ batchRecordsRouter.get(
       desviacionesAbiertas,
       actividadReciente,
     })
+  })
+)
+
+// El formulario de un paso puede tener selectores que traen sus opciones del catálogo de
+// Materiales (ver injectMaterialOptions en EditarBatchRecord.tsx), pero el módulo "materiales"
+// es aparte y un Rol de operario normalmente no lo tiene — administrar el catálogo y ejecutar un
+// lote son permisos distintos. Esta ruta expone la misma lista de solo lectura, con el módulo de
+// Batch Records que esta pantalla ya exige, para no obligar a dar también acceso a Materiales.
+batchRecordsRouter.get(
+  '/materiales-disponibles',
+  asyncHandler(async (_req, res) => {
+    res.json(await prisma.material.findMany({ orderBy: { codigo: 'asc' } }))
   })
 )
 

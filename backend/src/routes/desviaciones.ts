@@ -1,4 +1,4 @@
-import { Router } from 'express'
+import { Router, type Request } from 'express'
 import { z } from 'zod'
 import { prisma } from '../db/prisma.js'
 import { requireModuloEditar } from '../middleware/auth.js'
@@ -7,18 +7,36 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { logAudit, actorDe } from '../services/audit.js'
 import { verificarPin } from '../services/pin.js'
 import { getParametroGrupos } from '../services/parametros.js'
+import { gruposDeReceta, puedeAccederBatchRecord } from '../services/accesoBatchRecord.js'
 
 export const desviacionesRouter = Router()
 
 const usuarioSelect = { select: { nombres: true, apellidos: true, login: true } }
 const include = { usuarioReporta: usuarioSelect, usuarioCierra: usuarioSelect }
 
+// Misma regla de Centro + Grupo Responsable que /api/batch-records/:id (ver accesoBatchRecord.ts)
+// — una desviación es del Batch Record donde se reportó, así que el acceso es el mismo.
+async function assertAccesoABatchRecord(req: Request, idBatchRecord: number) {
+  const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord }, select: { idCentro: true, idRecetaMaestra: true } })
+  if (!br) throw new NotFoundError('Batch Record no encontrado')
+  const grupos = await gruposDeReceta(prisma, br.idRecetaMaestra)
+  if (!puedeAccederBatchRecord(req.auth!, br, grupos)) throw new ForbiddenError('No tiene acceso a este Batch Record')
+}
+
 desviacionesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const { idBatchRecord } = req.query
     const where: Record<string, unknown> = {}
-    if (typeof idBatchRecord === 'string' && idBatchRecord) where.idBatchRecord = Number(idBatchRecord)
+    if (typeof idBatchRecord === 'string' && idBatchRecord) {
+      const id = Number(idBatchRecord)
+      await assertAccesoABatchRecord(req, id)
+      where.idBatchRecord = id
+    } else if (!req.auth!.esAdministrador) {
+      // Sin un lote puntual, un no-administrador solo puede listar las de su propio Centro —
+      // el filtro de Grupo exige saber la receta de cada una, que no vale la pena acá.
+      where.batchRecord = { idCentro: req.auth!.idCentro ?? -1 }
+    }
     res.json(await prisma.desviacion.findMany({ where, include, orderBy: { fechaHora: 'desc' } }))
   })
 )
@@ -41,6 +59,7 @@ desviacionesRouter.post(
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const detalle = await prisma.detalle.findUnique({ where: { id: parsed.data.idDetalle } })
     if (!detalle) throw new NotFoundError('Detalle no encontrado')
+    await assertAccesoABatchRecord(req, parsed.data.idBatchRecord)
 
     const desviacion = await prisma.$transaction(async (tx) => {
       const creada = await tx.desviacion.create({
@@ -76,6 +95,7 @@ desviacionesRouter.post(
     const existente = await prisma.desviacion.findUnique({ where: { id }, include: { detalle: true } })
     if (!existente) throw new NotFoundError('Desviación no encontrada')
     if (existente.estado === 'cerrada') throw new ConflictError('Esta desviación ya fue cerrada')
+    await assertAccesoABatchRecord(req, existente.idBatchRecord)
 
     // Cerrar una desviación es una decisión de calidad — exige re-autenticación con PIN, igual
     // que firmar, liberar, cancelar o derogar una firma. Quién puede hacerlo (además de un
