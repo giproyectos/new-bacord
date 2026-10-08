@@ -662,6 +662,12 @@
       var currentForm = null;
       var currentSchema = null;
       var currentLanguage = 'en';
+      // Últimos datos reales recibidos (RENDER_JSON_WITH_DATA) — LOCK_FORM/UNLOCK_FORM los
+      // reutilizan para reconstruir el formulario, en vez de preguntarle al propio formulario
+      // "qué tienes ahora" (currentForm.submission): para los campos de fecha/hora, esa lectura
+      // en vivo no siempre trae lo guardado — a veces vuelve vacía, a veces con un valor por
+      // defecto — y terminaba perdiendo o cambiando el valor real al bloquear o desbloquear.
+      var currentSubmissionData = null;
 
       function patch24hSchema(node) {
         if (!node) return;
@@ -707,6 +713,63 @@
           input.parentNode.insertBefore(div, input.nextSibling);
           input.style.setProperty('display', 'none', 'important');
           input._dtext = div;
+        });
+      }
+
+      // Convierte el valor guardado de un campo de fecha/hora (form.io lo guarda como ISO,
+      // sin importar el formato de despliegue elegido) al texto que se muestra bloqueado.
+      // No usa moment/dayjs ni nada de form.io — solo Date nativo — para no depender de cómo
+      // esa librería interprete el campo, que es justo lo que fallaba antes.
+      function formatStoredDateTime(raw, comp) {
+        if (raw === undefined || raw === null || raw === '') return '—';
+        var d = new Date(raw);
+        if (isNaN(d.getTime())) return String(raw);
+        var hh = d.getHours(), mm = d.getMinutes();
+        var use24 = !!(comp.widget && comp.widget.time_24hr);
+        var timeStr;
+        if (use24) {
+          timeStr = (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+        } else {
+          var h12 = hh % 12; if (h12 === 0) h12 = 12;
+          timeStr = (h12 < 10 ? '0' : '') + h12 + ':' + (mm < 10 ? '0' : '') + mm + ' ' + (hh >= 12 ? 'pm' : 'am');
+        }
+        if (comp.type === 'time' || comp.enableDate === false) return timeStr;
+        var dd = d.getDate(), MM = d.getMonth() + 1, yyyy = d.getFullYear();
+        var dateStr = (dd < 10 ? '0' : '') + dd + '/' + (MM < 10 ? '0' : '') + MM + '/' + yyyy;
+        if (comp.enableTime === false) return dateStr;
+        return dateStr + ' ' + timeStr;
+      }
+
+      // Un componente datetime/time deshabilitado (formulario bloqueado) no cae en
+      // fixDisabledTextInputs: flatpickr arma dos <input> dentro de un .input-group (ver el
+      // comentario sobre ellos más abajo), y ninguno de los dos siempre llega a marcarse
+      // disabled de forma confiable — cuando el campo nace ya bloqueado (p. ej. al reabrir un
+      // Batch Record firmado), flatpickr a veces ni termina de inicializarse sobre un input que
+      // ya nació deshabilitado, dejando dos cajas visibles (una vacía) o el valor en blanco.
+      // Reemplazar todo el .input-group por texto plano evita pelear con esa inicialización.
+      // El texto sale de `data` — el mismo objeto de datos guardados que ya se usó para crear
+      // el formulario —, no de lo que el componente de form.io reporte en vivo: para estos
+      // campos, leer `component.dataValue` directamente llegó a devolver un valor por defecto
+      // (la hora actual) en vez del dato guardado, mostrando algo que el operario nunca escribió.
+      function fixDisabledDateTimeInputs(form, data) {
+        if (!form || typeof form.everyComponent !== 'function') return;
+        var values = (data && data.data) || {};
+        form.everyComponent(function (component) {
+          var type = component.component && component.component.type;
+          if (type !== 'datetime' && type !== 'time') return;
+          if (!component.disabled) return;
+          var el = component.element;
+          if (!el) return;
+          var group = el.querySelector('.input-group');
+          if (!group || group._dtextReplaced) return;
+          var key = component.component.key;
+          var raw = key ? values[key] : undefined;
+          var div = document.createElement('div');
+          div.className = 'dtext';
+          div.textContent = formatStoredDateTime(raw, component.component);
+          group.parentNode.insertBefore(div, group);
+          group.style.setProperty('display', 'none', 'important');
+          group._dtextReplaced = true;
         });
       }
 
@@ -1058,6 +1121,7 @@
           // Explicit submissionData wins; otherwise restore what was typed before.
           var dataToRestore = submissionData || savedSubmission;
           if (dataToRestore) form.submission = dataToRestore;
+          currentSubmissionData = dataToRestore;
           if (!formOptions.readOnly) {
             // Extract min/max from schema for manual range checking (avoids form.checkValidity dirty=true which shows red borders on load)
             var schemaLimits = {};
@@ -1141,6 +1205,7 @@
           // Init after render
           setTimeout(function() {
             fixDisabledTextInputs();
+            fixDisabledDateTimeInputs(form, dataToRestore);
             applyRadioInlineLayout(form);
             applyCheckedCardState(document.getElementById('render'));
             applySurveyQuestionHeader(form);
@@ -1164,7 +1229,7 @@
           // fixDisabledTextInputs/applyRadioInlineLayout/applyCheckedCardState are all
           // idempotent (they no-op or only touch attributes on repeat calls), so they're safe
           // to keep reacting to dynamic changes like new datagrid rows.
-          var obs = new MutationObserver(function() { wrapDatagrids(); initDatagridResizing(); fixDisabledTextInputs(); applyRadioInlineLayout(form); applyCheckedCardState(renderEl); });
+          var obs = new MutationObserver(function() { wrapDatagrids(); initDatagridResizing(); fixDisabledTextInputs(); fixDisabledDateTimeInputs(form, dataToRestore); applyRadioInlineLayout(form); applyCheckedCardState(renderEl); });
           obs.observe(renderEl, { childList: true, subtree: true });
           renderEl._resizeObserver = obs;
         }).catch(function(err) {
@@ -1240,11 +1305,19 @@
           catch(err) { console.error('RENDER_JSON_WITH_DATA parse error', err); }
         }
         if (e.data.type === 'LOCK_FORM') {
-          // Re-render el formulario en modo solo lectura conservando los datos ingresados.
+          // Re-render el formulario en modo solo lectura. Reutiliza currentSubmissionData (los
+          // últimos datos reales recibidos), no currentForm.submission — ver su declaración.
           if (currentForm && currentSchema) {
-            var savedSub = null;
-            try { savedSub = currentForm.submission; } catch(e) {}
-            createForm(currentSchema, savedSub, { readOnly: true });
+            createForm(currentSchema, currentSubmissionData, { readOnly: true });
+          }
+        }
+        if (e.data.type === 'UNLOCK_FORM') {
+          // Lo inverso de LOCK_FORM — se manda al derogar una firma de cierre. Sin esto, el
+          // formulario se quedaba en modo solo lectura para siempre una vez bloqueado: nada lo
+          // volvía a poner editable, así que después de derogar los campos se veían con sus
+          // valores pero congelados, y la validación de campos requeridos los tomaba como vacíos.
+          if (currentForm && currentSchema) {
+            createForm(currentSchema, currentSubmissionData, { readOnly: false });
           }
         }
         if (e.data.type === 'GETDATA_JSON') {

@@ -394,11 +394,16 @@ function compToJson(c: FormComp): Record<string, unknown> {
     if (c.type === 'time') {
       const tf = c.timeFormat ?? TIME_FORMATS[0].v
       b.format = tf
-      // Sin 'type: calendar' explícito, form.io renderiza este componente como el <input
-      // type="time"> nativo del navegador — un control aparte del selector (flatpickr) que usan
-      // 'datetime'/'day', que ignora por completo el formato de 12/24h elegido acá y no deja
-      // escribir una hora con el formato configurado.
-      b.widget = { ...(typeof b.widget === 'object' && b.widget ? b.widget as object : {}), type: 'calendar', time_24hr: tf === 'HH:mm' }
+      // El componente Time de form.io (TimeComponent.js, código fuente oficial) no tiene ningún
+      // concepto de 'widget' — un intento anterior de poner 'widget.type: calendar' (lo que usan
+      // 'datetime'/'day') no hacía nada, el campo seguía siendo el <input type="time"> nativo del
+      // navegador por debajo. Ese control nativo, en el entorno de pruebas, no deja completar una
+      // selección con el clic (el sistema operativo/navegador lo renderiza como un desplegable
+      // que no responde). 'inputType: text' es la salida que la propia librería ofrece para esto
+      // — cambia a un campo de texto con máscara (p. ej. "99:99 AA" para 12h) derivada de
+      // 'format', sin depender del selector nativo del sistema operativo.
+      delete b.widget
+      b.inputType = 'text'
     }
     if (c.type === 'pdf') {
       // Modo 'operario' (default): lo sube quien diligencia el Batch Record. El modo 'diseno'

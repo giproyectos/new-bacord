@@ -546,6 +546,12 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
 }) {
   const ref = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(500)
+  // render.html es un archivo estático — el navegador lo puede servir desde caché aunque se
+  // refresque la página completa a la fuerza, un refresco fuerte no siempre arrastra a los
+  // iframes que carga adentro. El editor de formularios ya evita esto con el mismo truco (ver
+  // su propio `?t=` al recargar la vista previa). Se calcula una sola vez por montaje, no en
+  // cada render, para no forzar una recarga del iframe en cada actualización de props.
+  const [cacheBust] = useState(() => Date.now())
   const onDataChangeRef = useRef(onDataChange)
   const onValidationRef = useRef<((errors: FormioRangeError[]) => void) | undefined>(onValidation)
   const onFieldFocusRef = useRef(onFieldFocus)
@@ -572,8 +578,13 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
       lockedRef.current = true
       ref.current?.contentWindow?.postMessage({ type: 'LOCK_FORM' }, window.location.origin)
     }
-    if (!locked) {
+    // Lo contrario también tiene que avisarle al formulario — derogar una firma de cierre pone
+    // `locked` en false mientras la página ya está abierta, y antes nada le decía al iframe que
+    // volviera a ser editable: se quedaba en modo solo lectura para siempre, con los datos
+    // guardados visibles pero congelados (y la validación los tomaba como vacíos).
+    if (!locked && lockedRef.current) {
       lockedRef.current = false
+      ref.current?.contentWindow?.postMessage({ type: 'UNLOCK_FORM' }, window.location.origin)
     }
   }, [locked])
 
@@ -639,7 +650,7 @@ export function FormioFrame({ schema, language = 'en', locked = false, lockedKey
   }, [schema, language])
 
   return (
-    <iframe ref={ref} src="/formio/render.html" title="Formulario"
+    <iframe ref={ref} src={`/formio/render.html?t=${cacheBust}`} title="Formulario"
       style={{ width:'100%', height, border:'none', display:'block' }} />
   )
 }
