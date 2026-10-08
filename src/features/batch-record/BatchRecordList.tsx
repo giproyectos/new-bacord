@@ -667,7 +667,11 @@ ${brSections}
           >
             <i className="fa fa-eye" aria-hidden="true" />
           </button>
-          {r.idEstado === 1 && puedeEditar && (
+          {/* El backend permite cancelar un lote En Tratamiento o Finalizado (solo bloquea
+              Cancelado y Liberado, que son terminales) — este botón solo dejaba cancelar En
+              Tratamiento, el mismo problema que tuvo el botón de Editar con los lotes
+              Finalizados. */}
+          {(r.idEstado === 1 || r.idEstado === 2) && puedeEditar && (
             <button
               className="dt-ab dt-ab-del"
               title="Cancelar batch record"
@@ -1050,6 +1054,11 @@ ${brSections}
                     if (!res.estado) { setCancelError(res.mensaje); return }
                     queryClient.invalidateQueries({ queryKey: ['batch-records'] })
                     cerrarModalCancelar()
+                  } catch (err) {
+                    // Un rechazo del servidor (p. ej. 403 por no tener el Grupo autorizado para
+                    // cancelar) llega como una promesa rechazada, no como `{ estado: false }` —
+                    // sin este catch, el modal se quedaba sin mostrar ningún motivo del rechazo.
+                    setCancelError(err instanceof Error ? err.message : 'No se pudo cancelar el Batch Record')
                   } finally {
                     setCancelSaving(false)
                   }

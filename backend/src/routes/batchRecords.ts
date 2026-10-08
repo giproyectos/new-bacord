@@ -8,6 +8,7 @@ import { getEstructuraProcesos, recomputePorcentajeAvance } from '../services/ba
 import { logAudit, actorDe, type AuditCambio } from '../services/audit.js'
 import { findFirmaSeccionEstrategia, limitesNumericos, valoresFueraDeRango } from '../services/formioSchema.js'
 import { verificarPin } from '../services/pin.js'
+import { getParametroGrupos } from '../services/parametros.js'
 import { gruposDeReceta, puedeAccederBatchRecord } from '../services/accesoBatchRecord.js'
 
 export const batchRecordsRouter = Router()
@@ -694,12 +695,22 @@ batchRecordsRouter.post(
     }
 
     // Liberar el lote es un evento crítico GMP: exige re-autenticación explícita del firmante, igual que una firma.
-    const usuario = await prisma.usuario.findUnique({ where: { login } })
+    const usuario = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
     if (!usuario || !usuario.activo || usuario.bloqueado) {
       return res.json({ estado: false, mensaje: 'Usuario no válido para liberar el lote' })
     }
     const pinCheck = await verificarPin(prisma, usuario, pin)
     if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
+
+    // Quién puede liberar (además de un administrador) es configurable por cliente vía el
+    // parámetro `batch_records_grupo_liberar` — vacío por defecto, para no asumir qué Grupo
+    // Responsable debe tener este permiso hasta que el cliente lo decida (igual criterio que
+    // `desviaciones_grupo_cierre`).
+    if (!usuario.esAdministrador) {
+      const gruposAutorizados = await getParametroGrupos(prisma, 'batch_records_grupo_liberar', '')
+      const autorizado = gruposAutorizados.length > 0 && usuario.grupos.some((g) => gruposAutorizados.includes(g.grupo.nombre))
+      if (!autorizado) throw new ForbiddenError('No tiene permisos para liberar este Batch Record')
+    }
 
     const liberacion = await prisma.$transaction(async (tx) => {
       const creada = await tx.batchRecordLiberacion.create({
@@ -739,12 +750,22 @@ batchRecordsRouter.post(
 
     // Cancelar un lote es un evento crítico GMP — exige re-autenticación explícita con PIN,
     // igual que firmar, liberar o derogar una firma.
-    const solicitante = await prisma.usuario.findUnique({ where: { login } })
+    const solicitante = await prisma.usuario.findUnique({ where: { login }, include: { grupos: { include: { grupo: true } } } })
     if (!solicitante || !solicitante.activo || solicitante.bloqueado) {
       return res.json({ estado: false, mensaje: 'Usuario no válido para cancelar' })
     }
     const pinCheck = await verificarPin(prisma, solicitante, pin)
     if (!pinCheck.ok) return res.json({ estado: false, mensaje: pinCheck.mensaje })
+
+    // Quién puede cancelar (además de un administrador) es configurable por cliente vía el
+    // parámetro `batch_records_grupo_cancelar` — vacío por defecto, para no asumir qué Grupo
+    // Responsable debe tener este permiso hasta que el cliente lo decida (igual criterio que
+    // `desviaciones_grupo_cierre`).
+    if (!solicitante.esAdministrador) {
+      const gruposAutorizados = await getParametroGrupos(prisma, 'batch_records_grupo_cancelar', '')
+      const autorizado = gruposAutorizados.length > 0 && solicitante.grupos.some((g) => gruposAutorizados.includes(g.grupo.nombre))
+      if (!autorizado) throw new ForbiddenError('No tiene permisos para cancelar este Batch Record')
+    }
 
     const br = await prisma.$transaction(async (tx) => {
       const actualizado = await tx.batchRecord.update({

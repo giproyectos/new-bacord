@@ -37,6 +37,8 @@ async function main() {
     { nombre: 'password_requiere_minuscula', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos una letra minúscula (true/false).' },
     { nombre: 'password_requiere_especial', valor: 'true', descripcion: 'Si la contraseña debe incluir al menos un carácter especial (true/false).' },
     { nombre: 'desviaciones_grupo_cierre', valor: 'Calidad', descripcion: 'Grupos Responsables (separados por coma) autorizados a cerrar una desviación, además de los administradores.' },
+    { nombre: 'batch_records_grupo_cancelar', valor: '', descripcion: 'Grupos Responsables (separados por coma) autorizados a cancelar un Batch Record, además de los administradores. Vacío = solo administradores, hasta que se decida a quién más dar este permiso.' },
+    { nombre: 'batch_records_grupo_liberar', valor: '', descripcion: 'Grupos Responsables (separados por coma) autorizados a liberar un Batch Record, además de los administradores. Vacío = solo administradores, hasta que se decida a quién más dar este permiso.' },
   ]
   for (const p of parametrosPorDefecto) {
     await prisma.parametro.upsert({ where: { nombre: p.nombre }, update: {}, create: p })
