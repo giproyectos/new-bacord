@@ -60,7 +60,9 @@ auditoriaRouter.get(
 const cambioSchema = z.object({ campo: z.string(), etiqueta: z.string(), valorAnterior: z.string(), valorNuevo: z.string() })
 
 // Solo estas combinaciones entidad+acción llegan hoy desde el cliente (ver useAudit.ts y sus
-// usos: cerrar sesión, registrar acceso a un Batch Record, y anotar un paquete multi-lote).
+// usos: cerrar sesión, registrar acceso a un Batch Record (ACCEDER — antes reusaba CREAR por
+// error, lo que dejaba el Batch Record pareciendo "creado" una vez por cada vez que alguien
+// lo abría), y anotar un paquete multi-lote).
 // Cualquier otra acción de negocio (firmar, cancelar, derogar, liberar, cerrar una etapa,
 // modificar un Detalle...) la registra el propio backend, dentro de la misma transacción que
 // hace el cambio real — nunca a través de este endpoint genérico. Permitir aquí cualquier
@@ -70,7 +72,7 @@ const registrarSchema = z.object({
   entidad: z.enum(['BatchRecord', 'Sesion']),
   idEntidad: z.union([z.string(), z.number()]),
   descripcionEntidad: z.string(),
-  accion: z.enum(['CREAR', 'MODIFICAR', 'LOGOUT']),
+  accion: z.enum(['CREAR', 'MODIFICAR', 'ACCEDER', 'LOGOUT']),
   modulo: z.string(),
   cambios: z.array(cambioSchema).optional(),
   motivo: z.string().optional(),

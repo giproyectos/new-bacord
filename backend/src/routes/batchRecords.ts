@@ -65,7 +65,9 @@ async function ultimaActividadPorBatchRecord(ids: number[]): Promise<Map<number,
 // desviaciones ocurriendo todo el tiempo. Estos son los eventos reales del audit trail — se
 // acota por Centro (no por `dias`: es "qué está pasando ahora mismo", no un reporte histórico).
 async function actividadRecienteDeBR(idCentro: number | undefined, take = 8) {
-  const where: Record<string, unknown> = { entidad: { in: ENTIDADES_DE_BR } }
+  // `ACCEDER` (solo abrir el Batch Record para verlo) no es un evento de producción — mezclado
+  // aquí ahogaría las firmas, cierres y desviaciones reales con "alguien lo abrió" cada vez.
+  const where: Record<string, unknown> = { entidad: { in: ENTIDADES_DE_BR }, accion: { not: 'ACCEDER' } }
   if (idCentro !== undefined) {
     const brsDelCentro = await prisma.batchRecord.findMany({ where: { idCentro }, select: { idBatchRecord: true } })
     where.idEntidad = { in: brsDelCentro.map((b) => String(b.idBatchRecord)) }

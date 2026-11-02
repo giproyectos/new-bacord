@@ -5,6 +5,7 @@ import type { AuditEntry, AuditAccion } from '@/types/audit'
 // ── Config ────────────────────────────────────────────────────────────────
 const ACCION_CFG: Record<AuditAccion, { label: string; bg: string; color: string; dot: string }> = {
   CREAR:          { label: 'Creación',       bg: '#D1FAE5', color: '#065F46', dot: '#10B981' },
+  ACCEDER:        { label: 'Acceso',         bg: '#F1F5F9', color: '#334155', dot: '#64748B' },
   MODIFICAR:      { label: 'Modificación',   bg: '#DBEAFE', color: '#1D4ED8', dot: '#3B82F6' },
   CANCELAR:       { label: 'Cancelación',    bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
   FIRMAR_SECCION: { label: 'Firma Sección',  bg: '#EDE9FE', color: '#5B21B6', dot: '#7C3AED' },

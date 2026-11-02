@@ -1296,6 +1296,7 @@ function DetalleCard({ detalle, readonly, permiteDerogar, firmados, desviaciones
 // ── AuditPreviewPanel / AuditExpandedPanel ────────────────────────────────
 const AUDIT_CFG: Record<string, { bg: string; color: string; border: string; label: string; icon: string }> = {
   CREAR:                { bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7', label:'Creación',            icon:'fa-plus' },
+  ACCEDER:              { bg:'#F1F5F9', color:'#334155', border:'#CBD5E1', label:'Acceso',              icon:'fa-eye' },
   MODIFICAR:            { bg:'#DBEAFE', color:'#1D4ED8', border:'#93C5FD', label:'Modificación',        icon:'fa-pencil-alt' },
   CANCELAR:             { bg:'#FEE2E2', color:'#991B1B', border:'#FCA5A5', label:'Cancelación',         icon:'fa-ban' },
   FIRMAR_SECCION:       { bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD', label:'Firma Sección',       icon:'fa-pen' },
@@ -1843,7 +1844,10 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
       entidad: 'BatchRecord',
       idEntidad: idNum,
       descripcionEntidad: `Batch Record #${id}`,
-      accion: 'CREAR',
+      // No es 'CREAR' — esto se dispara cada vez que alguien abre el Batch Record para editar,
+      // no cuando se crea. Usar 'CREAR' acá hacía que el lote apareciera "creado" una vez por
+      // cada visita en el panel de auditoría.
+      accion: 'ACCEDER',
       modulo: 'batch-record',
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps

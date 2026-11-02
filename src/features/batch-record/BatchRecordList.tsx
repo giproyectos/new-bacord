@@ -144,6 +144,7 @@ export function BatchRecordList() {
 
     const AUDIT_CFG: Record<string, { label: string; bg: string; color: string; border: string }> = {
       CREAR:          { label:'Creación',      bg:'#D1FAE5', color:'#065F46', border:'#6EE7B7' },
+      ACCEDER:        { label:'Acceso',        bg:'#F1F5F9', color:'#334155', border:'#CBD5E1' },
       MODIFICAR:      { label:'Modificación',  bg:'#DBEAFE', color:'#1D4ED8', border:'#93C5FD' },
       CANCELAR:       { label:'Cancelación',   bg:'#FEE2E2', color:'#991B1B', border:'#FCA5A5' },
       FIRMAR_SECCION: { label:'Firma Sección', bg:'#EDE9FE', color:'#5B21B6', border:'#C4B5FD' },
