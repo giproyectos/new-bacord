@@ -2,12 +2,15 @@ import { http } from './http'
 import type { GrupoResponsable, Resultado } from '@/types'
 
 type GrupoResponsableInput = Pick<GrupoResponsable, 'nombre' | 'descripcion' | 'colorKey'>
+// El backend acepta `activo` en el PUT (ver gruposResponsables.ts) — se necesita aparte para
+// reactivar un grupo, ya que `eliminar` abajo solo lo apaga y no había forma de revertirlo.
+type GrupoResponsableUpdate = Partial<GrupoResponsableInput> & { activo?: boolean }
 
 export const gruposResponsablesApi = {
   listar: async (): Promise<GrupoResponsable[]> => (await http.get<GrupoResponsable[]>('/grupos-responsables')).data,
   crear: async (data: GrupoResponsableInput): Promise<Resultado<GrupoResponsable>> =>
     (await http.post<Resultado<GrupoResponsable>>('/grupos-responsables', data)).data,
-  actualizar: async (id: number, data: Partial<GrupoResponsableInput>): Promise<Resultado<GrupoResponsable>> =>
+  actualizar: async (id: number, data: GrupoResponsableUpdate): Promise<Resultado<GrupoResponsable>> =>
     (await http.put<Resultado<GrupoResponsable>>(`/grupos-responsables/${id}`, data)).data,
   eliminar: async (id: number): Promise<Resultado> => (await http.delete<Resultado>(`/grupos-responsables/${id}`)).data,
 }

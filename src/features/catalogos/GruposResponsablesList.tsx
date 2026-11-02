@@ -71,6 +71,8 @@ export function GruposResponsablesList() {
     cargar()
   }
 
+  const reactivar = async (g: GrupoResponsable) => { await gruposResponsablesApi.actualizar(g.id, { activo: true }); cargar() }
+
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}><i className="fa fa-spinner fa-spin" /></div>
 
   return (
@@ -115,6 +117,10 @@ export function GruposResponsablesList() {
                 <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5 }}>
                   <DotColor colorKey={g.colorKey} size={13} />
                   <span style={{ fontSize:14.5, fontWeight:700, color:c.text }}>{g.nombre}</span>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:10.5, fontWeight:600, color: g.activo ? '#065F46' : 'var(--ink-4)' }}>
+                    <span style={{ width:6, height:6, borderRadius:'50%', background: g.activo ? '#10B981' : 'var(--hair-2)' }} />
+                    {g.activo ? 'Activo' : 'Inactivo'}
+                  </span>
                 </div>
                 <p style={{ margin:0, fontSize:12.5, color:'var(--ink-4)', lineHeight:1.4, minHeight:34 }}>
                   {g.descripcion || <em>Sin descripción</em>}
@@ -124,7 +130,11 @@ export function GruposResponsablesList() {
                 <div style={{ padding:'8px 14px', borderTop:'1px solid var(--hair)', display:'flex', alignItems:'center', justifyContent:'flex-end', background:'var(--paper-2)' }}>
                   <div style={{ display:'flex', gap:2 }}>
                     <button className="gr-icn" title="Editar" onClick={() => openEditar(g)}><i className="fa fa-pencil-alt" /></button>
-                    <button className="gr-icn del" title="Eliminar" onClick={() => setWarn(g)}><i className="fa fa-trash-alt" /></button>
+                    {g.activo ? (
+                      <button className="gr-icn del" title="Desactivar" onClick={() => setWarn(g)}><i className="fa fa-ban" /></button>
+                    ) : (
+                      <button className="gr-icn" title="Reactivar" onClick={() => reactivar(g)}><i className="fa fa-undo" /></button>
+                    )}
                   </div>
                 </div>
               )}

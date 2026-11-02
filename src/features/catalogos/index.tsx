@@ -65,10 +65,17 @@ export function MaterialesList() {
         loading={loading}
         canCreate={puedeEditar}
         canEdit={puedeEditar}
+        deleteMode="desactivar"
         columns={[
           { key: 'codigo', header: 'Código', width: '15%', sortable: true },
           { key: 'descripcion', header: 'Descripción', sortable: true },
           { key: 'tipo', header: 'Tipo', width: '22%', render: (row: Material) => <TipoMaterialBadge tipo={row.tipo} /> },
+          { key: 'activo', header: 'Estado', width: '12%', render: (row: Material) => (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: row.activo ? '#065F46' : 'var(--ink-4)' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: row.activo ? '#10B981' : 'var(--hair-2)', flexShrink: 0 }} />
+              {row.activo ? 'Activo' : 'Inactivo'}
+            </span>
+          ) },
         ]}
         fields={[
           { key: 'codigo', label: 'Código', required: true },
@@ -80,14 +87,21 @@ export function MaterialesList() {
           if (isEdit) {
             // `row` es la fila que se abrió para editar — buscarla en `data` por `values.codigo` (como
             // antes) fallaba en silencio si el usuario cambiaba el código, porque ese valor ya no
-            // coincidía con ninguna fila existente.
-            if (row) await materialesApi.actualizar(row.id, { descripcion: values.descripcion, tipo })
+            // coincidía con ninguna fila existente. El PUT tampoco mandaba `codigo` — cambiarlo en
+            // el formulario no tenía ningún efecto, aunque descripción y tipo sí se guardaban.
+            if (row) await materialesApi.actualizar(row.id, { codigo: values.codigo, descripcion: values.descripcion, tipo })
           } else {
             await materialesApi.crear({ codigo: values.codigo, descripcion: values.descripcion, tipo })
           }
           cargar()
         }}
         onDelete={async row => { await materialesApi.eliminar(row.id); cargar() }}
+        extraActions={row => !row.activo && puedeEditar ? (
+          <button className="dt-ab" title="Reactivar"
+            onClick={async () => { await materialesApi.actualizar(row.id, { activo: true }); cargar() }}>
+            <i className="fa fa-undo" />
+          </button>
+        ) : null}
       />
     </>
   )

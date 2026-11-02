@@ -52,6 +52,8 @@ export function CentrosList() {
     }
   }
 
+  const reactivar = async (c: Centro) => { await centrosApi.actualizar(c.id, { activo: true }); cargar() }
+
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--ink-4)' }}><i className="fa fa-spinner fa-spin" /></div>
 
   return (
@@ -107,6 +109,10 @@ export function CentrosList() {
                   <div style={{ display:'flex', alignItems:'center', gap:7, flexWrap:'wrap' }}>
                     <span style={{ fontSize:14.5, fontWeight:700, color:'var(--ink)', lineHeight:1.2 }}>{c.descripcion}</span>
                     <span style={{ fontFamily:'var(--f-mono)', fontSize:10.5, fontWeight:700, color:'#4F46E5', background:'#EEF2FF', padding:'1px 7px', borderRadius:4 }}>{c.codigo}</span>
+                    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:10.5, fontWeight:600, color: c.activo ? '#065F46' : 'var(--ink-4)' }}>
+                      <span style={{ width:6, height:6, borderRadius:'50%', background: c.activo ? '#10B981' : 'var(--hair-2)' }} />
+                      {c.activo ? 'Activo' : 'Inactivo'}
+                    </span>
                   </div>
                   {c.direccion && (
                     <div style={{ marginTop:4, fontSize:12, color:'var(--ink-4)', display:'flex', alignItems:'center', gap:5, lineHeight:1.3 }}>
@@ -121,7 +127,11 @@ export function CentrosList() {
               <div style={{ padding:'8px 14px', borderTop:'1px solid var(--hair)', display:'flex', alignItems:'center', justifyContent:'flex-end', background:'var(--paper-2)' }}>
                 <div style={{ display:'flex', gap:2 }}>
                   <button className="cn-icn" title="Editar" onClick={() => openEditar(c)}><i className="fa fa-pencil-alt" /></button>
-                  <button className="cn-icn del" title="Eliminar" onClick={() => { setWarn(c); setErrEliminar('') }}><i className="fa fa-trash-alt" /></button>
+                  {c.activo ? (
+                    <button className="cn-icn del" title="Desactivar" onClick={() => { setWarn(c); setErrEliminar('') }}><i className="fa fa-ban" /></button>
+                  ) : (
+                    <button className="cn-icn" title="Reactivar" onClick={() => reactivar(c)}><i className="fa fa-undo" /></button>
+                  )}
                 </div>
               </div>
             )}

@@ -24,6 +24,11 @@ interface Props<T> {
    *  puede haber cambiado de valor en el propio formulario que se está guardando). */
   onSave?: (values: Record<string, string>, isEdit: boolean, row?: T) => void | Promise<void>
   onDelete?: (row: T) => void | Promise<void>
+  /** 'eliminar' (por defecto): borrado real, como Parámetros. 'desactivar': `onDelete` en
+   *  realidad solo apaga `activo` en el servidor (como Materiales) — el botón, el ícono y el
+   *  texto del modal lo dicen así, en vez de advertir "se eliminará de forma permanente" sobre
+   *  algo que ni se borra ni es permanente. */
+  deleteMode?: 'eliminar' | 'desactivar'
   extraActions?: (row: T) => React.ReactNode
   icon?: string
   description?: string
@@ -32,9 +37,10 @@ interface Props<T> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function CatalogPage<T = any>({
   panelTitle, columns, data, loading, fields,
-  canCreate = true, canEdit = true, onSave, onDelete, extraActions,
+  canCreate = true, canEdit = true, onSave, onDelete, deleteMode = 'eliminar', extraActions,
   icon = 'fa-list-alt', description,
 }: Props<T>) {
+  const esDesactivar = deleteMode === 'desactivar'
   type ModalMode = 'create' | 'edit' | 'delete' | null
   const [mode, setMode]       = useState<ModalMode>(null)
   const [values, setValues]   = useState<Record<string, string>>({})
@@ -135,8 +141,8 @@ export function CatalogPage<T = any>({
               <button className="dt-ab dt-ab-edit" title="Editar" onClick={() => openEdit(row)}>
                 <i className="fa fa-pencil-alt" />
               </button>
-              <button className="dt-ab dt-ab-del" title="Eliminar" onClick={() => openDelete(row)}>
-                <i className="fa fa-trash-alt" />
+              <button className="dt-ab dt-ab-del" title={esDesactivar ? 'Desactivar' : 'Eliminar'} onClick={() => openDelete(row)}>
+                <i className={`fa ${esDesactivar ? 'fa-ban' : 'fa-trash-alt'}`} />
               </button>
             </>
           )}
@@ -314,19 +320,21 @@ export function CatalogPage<T = any>({
         <div className="cp-mo" onClick={closeModal}>
           <div className="cp-mbox" onClick={e => e.stopPropagation()}>
             <div className="cp-mhdr">
-              <div className="cp-mhdr-icon del"><i className="fa fa-trash-alt" /></div>
+              <div className="cp-mhdr-icon del"><i className={`fa ${esDesactivar ? 'fa-ban' : 'fa-trash-alt'}`} /></div>
               <div>
-                <div className="cp-mhdr-title">Confirmar eliminación</div>
-                <div className="cp-mhdr-sub">Esta acción no se puede deshacer</div>
+                <div className="cp-mhdr-title">{esDesactivar ? 'Confirmar desactivación' : 'Confirmar eliminación'}</div>
+                <div className="cp-mhdr-sub">{esDesactivar ? 'Se puede volver a activar más adelante' : 'Esta acción no se puede deshacer'}</div>
               </div>
               <button className="cp-mhdr-close" onClick={closeModal}>×</button>
             </div>
             <div className="cp-del-body">
               <div className="cp-del-ico"><i className="fa fa-exclamation-triangle" /></div>
               <div>
-                <div className="cp-del-title">¿Eliminar este registro?</div>
+                <div className="cp-del-title">{esDesactivar ? '¿Desactivar este registro?' : '¿Eliminar este registro?'}</div>
                 <div className="cp-del-msg">
-                  Se eliminará <strong>{deleteLabel}</strong> de forma permanente.
+                  {esDesactivar
+                    ? <>Se desactivará <strong>{deleteLabel}</strong>. Dejará de estar disponible para nuevos registros, pero seguirá visible donde ya estaba asignado, y se puede reactivar luego.</>
+                    : <>Se eliminará <strong>{deleteLabel}</strong> de forma permanente.</>}
                 </div>
                 {deleteError && (
                   <div className="cp-field-err" style={{ fontSize: 12.5, marginTop: 8 }}>
@@ -337,8 +345,8 @@ export function CatalogPage<T = any>({
             </div>
             <div className="cp-mfoot">
               <button className="btn btn-gray" onClick={closeModal} disabled={eliminando}><i className="fa fa-undo" /> Cancelar</button>
-              <button className="btn btn-danger" onClick={handleDelete} disabled={eliminando}>
-                <i className={`fa ${eliminando ? 'fa-spinner fa-spin' : 'fa-trash-alt'}`} /> Eliminar
+              <button className={`btn ${esDesactivar ? 'btn-warning' : 'btn-danger'}`} onClick={handleDelete} disabled={eliminando}>
+                <i className={`fa ${eliminando ? 'fa-spinner fa-spin' : esDesactivar ? 'fa-ban' : 'fa-trash-alt'}`} /> {esDesactivar ? 'Desactivar' : 'Eliminar'}
               </button>
             </div>
           </div>
