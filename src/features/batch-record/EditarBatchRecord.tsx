@@ -846,9 +846,15 @@ function DesviacionModal({ error, valorIngresado, detalleCode, onSubmit, onClose
 }
 
 // ── DetalleCard ───────────────────────────────────────────────────────────
-function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, onRequestCerrarDesviacion, preLlenado, onCampoActivo }: {
+function DetalleCard({ detalle, readonly, permiteDerogar, firmados, desviaciones, onFirmar, initialValues, lockedKeys, onFormData, onRequestDerogar, onDesviacion, onRequestCerrarDesviacion, preLlenado, onCampoActivo }: {
   detalle: DetalleRow
   readonly: boolean
+  // Independiente de `readonly`: ese también se pone en true cuando la etapa ya está cerrada
+  // ("Cerrar Proceso"), para bloquear los campos del formulario. Derogar una firma de cierre
+  // reabre esa etapa de una vez (ver la ruta /derogar en el backend) — si el botón dependiera
+  // de `readonly`, quedaría escondido justo cuando hace falta: una etapa cerrada por error, sin
+  // ninguna otra forma de reabrirla.
+  permiteDerogar: boolean
   firmados: FirmaMap
   desviaciones: Desviacion[]
   onFirmar: (firma: EstructuraFirmaItem) => void
@@ -896,7 +902,7 @@ function DetalleCard({ detalle, readonly, firmados, desviaciones, onFirmar, init
   // del navegador — el mismo patrón pensado para un equipo compartido en planta, donde la
   // persona que re-autentica (p. ej. alguien de Calidad) no es necesariamente quien tiene la
   // sesión abierta (p. ej. un operario de Producción).
-  const puedeDerogar = !readonly
+  const puedeDerogar = permiteDerogar
 
   const cierFirmadas = firmasCierre.filter(f => !!firmados[`cie:${detalle.id}:${f.idFirma}`]).length
   const allCierDone  = firmasCierre.length > 0 && cierFirmadas === firmasCierre.length
@@ -2616,6 +2622,7 @@ ${procsSections}
                     firmados={firmados}
                     desviaciones={desviaciones}
                     readonly={(procesoActivo != null && procesosCerrados.has(procesoActivo)) || soloLectura}
+                    permiteDerogar={!soloLectura}
                     onFirmar={firma => { if (!soloLectura) setFirmaTarget({ detalle: det, firma }) }}
                     initialValues={{ ...opMappings, ...(detalleDatos[det.id] ?? {}) }}
                     lockedKeys={Object.keys(opMappings)}

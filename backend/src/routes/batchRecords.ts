@@ -648,6 +648,29 @@ batchRecordsRouter.post(
         await recomputePorcentajeAvance(tx, idBatchRecord)
         // Derogar una firma de cierre reabre el BR si ya estaba Finalizado.
         if (br.idEstado === 2) await tx.batchRecord.update({ where: { idBatchRecord }, data: { idEstado: 1 } })
+
+        // ...y también reabre la etapa que esa firma había cerrado, si ya estaba cerrada — igual
+        // criterio que reabrir el BR completo: no tenía sentido dejar la etapa marcada como
+        // cerrada (campos bloqueados, "Cerrar Proceso" ya hecho) mientras la firma que la cerró
+        // ya no existe. Sin esto no había ninguna forma, ni por API ni por pantalla, de reabrir
+        // una etapa una vez cerrada.
+        const rd = await tx.recetaDetalle.findFirst({
+          where: { idDetalle: registro.idDetalle, recetaProceso: { idRecetaMaestra: br.idRecetaMaestra } },
+          select: { recetaProceso: { select: { idProceso: true } } },
+        })
+        if (rd) {
+          const { count } = await tx.batchRecordProcesoCierre.deleteMany({
+            where: { idBatchRecord, idProceso: rd.recetaProceso.idProceso },
+          })
+          if (count > 0) {
+            await logAudit(tx, {
+              entidad: 'BatchRecord', idEntidad: idBatchRecord,
+              descripcionEntidad: `BR-${idBatchRecord} · ${detalle.descripcion}`,
+              accion: 'MODIFICAR', modulo: 'batch-record', motivo: 'Etapa reabierta al derogar su firma de cierre',
+              actor: await actorDe(tx, solicitante.idUsuario),
+            })
+          }
+        }
       }
       await logAudit(tx, {
         entidad: registro.bloqueKey ? 'FirmaSeccion' : 'FirmaCierre', idEntidad: idBatchRecord,
