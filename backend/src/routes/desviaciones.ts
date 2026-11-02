@@ -17,10 +17,11 @@ const include = { usuarioReporta: usuarioSelect, usuarioCierra: usuarioSelect }
 // Misma regla de Centro + Grupo Responsable que /api/batch-records/:id (ver accesoBatchRecord.ts)
 // — una desviación es del Batch Record donde se reportó, así que el acceso es el mismo.
 async function assertAccesoABatchRecord(req: Request, idBatchRecord: number) {
-  const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord }, select: { idCentro: true, idRecetaMaestra: true } })
+  const br = await prisma.batchRecord.findUnique({ where: { idBatchRecord }, select: { idCentro: true, idRecetaMaestra: true, idEstado: true } })
   if (!br) throw new NotFoundError('Batch Record no encontrado')
   const grupos = await gruposDeReceta(prisma, br.idRecetaMaestra)
   if (!puedeAccederBatchRecord(req.auth!, br, grupos)) throw new ForbiddenError('No tiene acceso a este Batch Record')
+  return br
 }
 
 desviacionesRouter.get(
@@ -59,7 +60,11 @@ desviacionesRouter.post(
     if (!parsed.success) throw new ValidationError(parsed.error.message)
     const detalle = await prisma.detalle.findUnique({ where: { id: parsed.data.idDetalle } })
     if (!detalle) throw new NotFoundError('Detalle no encontrado')
-    await assertAccesoABatchRecord(req, parsed.data.idBatchRecord)
+    const br = await assertAccesoABatchRecord(req, parsed.data.idBatchRecord)
+    // Una desviación se reporta como consecuencia de ingresar un valor fuera de rango mientras
+    // se completa el formulario — solo puede pasar con el Batch Record en proceso, igual que
+    // editar cualquier otro campo (ver assertEnProceso en batch-records).
+    if (br.idEstado !== 1) throw new ConflictError('No se puede registrar una desviación en un Batch Record que no está en proceso')
 
     const desviacion = await prisma.$transaction(async (tx) => {
       const creada = await tx.desviacion.create({
