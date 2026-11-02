@@ -1501,6 +1501,10 @@ function AuditPreviewPanel({ brId, refreshKey, campoActivo }: {
           background: transparent; color: rgba(255,255,255,0.4); transition: background 100ms, color 100ms;
         }
         .audit-tab.activo { background: rgba(255,255,255,0.06); color: #F7C92E; }
+        .audit-seccion-label {
+          padding: 9px 13px 5px; font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3);
+          text-transform: uppercase; letter-spacing: .07em;
+        }
         .audit-campo-card { border-bottom: 1px solid rgba(255,255,255,0.06); }
         .audit-campo-head {
           width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 13px 0;
@@ -1578,40 +1582,57 @@ function AuditPreviewPanel({ brId, refreshKey, campoActivo }: {
           ))
         ) : vista === 'campos' ? (
           <>
-            {eventosFiltrados.map(e => <EntradaEvento key={e.id} entry={e} />)}
-            {camposFiltrados.length === 0 ? (
-              eventosFiltrados.length === 0 && (
-                <div style={{ padding: '30px 16px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>
-                    {q ? 'Nada coincide con la búsqueda.' : 'Aún no hay eventos registrados.'}
-                  </div>
+            {/* Lo que da sentido a esta pestaña va primero: los campos agrupados. Antes los
+                eventos sin campo (accesos, firmas, cierres...) iban adelante, sin recortar —
+                con pocos cambios de campo reales y muchos otros eventos, "Por Campo" terminaba
+                viéndose casi igual que "Todo", con el agrupado como un agregado al final que
+                nadie llegaba a notar. */}
+            {camposFiltrados.length === 0 && eventosFiltrados.length === 0 ? (
+              <div style={{ padding: '30px 16px', textAlign: 'center' }}>
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>
+                  {q ? 'Nada coincide con la búsqueda.' : 'Aún no hay eventos registrados.'}
                 </div>
-              )
-            ) : camposFiltrados.map(g => {
-              const [ultimo, ...resto] = g.cambios
-              const abierto = campoAbierto === g.campo
-              return (
-                <div key={g.campo} className="audit-campo-card">
-                  <button
-                    className="audit-campo-head"
-                    onClick={() => resto.length > 0 && setCampoAbierto(abierto ? null : g.campo)}
-                    aria-expanded={resto.length > 0 ? abierto : undefined}
-                  >
-                    <span className="audit-campo-nombre">{g.campo}</span>
-                    <span className="audit-campo-count">{g.cambios.length}</span>
-                    {resto.length > 0 && (
-                      <i className={`fa fa-chevron-${abierto ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }} aria-hidden="true" />
-                    )}
-                  </button>
-                  {/* Último cambio: siempre visible, sin necesidad de expandir nada. */}
-                  <CampoTransicion entry={ultimo.entry} cambio={ultimo.cambio} />
-                  {/* Cambios anteriores de este campo: solo al expandir. */}
-                  {abierto && resto.map(({ entry, cambio }, i) => (
-                    <CampoTransicion key={i} entry={entry} cambio={cambio} atenuado />
-                  ))}
-                </div>
-              )
-            })}
+              </div>
+            ) : (
+              <>
+                {camposFiltrados.length > 0 && (
+                  <>
+                    <div className="audit-seccion-label">Campos del formulario</div>
+                    {camposFiltrados.map(g => {
+                      const [ultimo, ...resto] = g.cambios
+                      const abierto = campoAbierto === g.campo
+                      return (
+                        <div key={g.campo} className="audit-campo-card">
+                          <button
+                            className="audit-campo-head"
+                            onClick={() => resto.length > 0 && setCampoAbierto(abierto ? null : g.campo)}
+                            aria-expanded={resto.length > 0 ? abierto : undefined}
+                          >
+                            <span className="audit-campo-nombre">{g.campo}</span>
+                            <span className="audit-campo-count">{g.cambios.length}</span>
+                            {resto.length > 0 && (
+                              <i className={`fa fa-chevron-${abierto ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)' }} aria-hidden="true" />
+                            )}
+                          </button>
+                          {/* Último cambio: siempre visible, sin necesidad de expandir nada. */}
+                          <CampoTransicion entry={ultimo.entry} cambio={ultimo.cambio} />
+                          {/* Cambios anteriores de este campo: solo al expandir. */}
+                          {abierto && resto.map(({ entry, cambio }, i) => (
+                            <CampoTransicion key={i} entry={entry} cambio={cambio} atenuado />
+                          ))}
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
+                {eventosFiltrados.length > 0 && (
+                  <>
+                    <div className="audit-seccion-label">Otros eventos</div>
+                    {eventosFiltrados.map(e => <EntradaEvento key={e.id} entry={e} />)}
+                  </>
+                )}
+              </>
+            )}
           </>
         ) : entriesFiltradas.length === 0 ? (
           <div style={{ padding: '30px 16px', textAlign: 'center' }}>
