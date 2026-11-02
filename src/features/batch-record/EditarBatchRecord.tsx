@@ -1961,10 +1961,11 @@ export function EditarBatchRecord({ readonly = false }: { readonly?: boolean }) 
     const fc = getFirmasDeEstrategia(d)
     return fc.length > 0 && fc.every(f => !!firmados[`cie:${d.id}:${f.idFirma}`])
   })
-
-  const handleCerrarBatch = () => {
-    navigate('/batch-records')
-  }
+  // El servidor ya lo rechaza (ver /procesos/:idProceso/cerrar), pero el botón debe adelantarlo
+  // igual que ya hace con las firmas pendientes — no tiene sentido dejarlo habilitado solo para
+  // que el clic falle con un mensaje.
+  const sinDesviacionesAbiertasProceso = !detallesProceso.some(d =>
+    desviaciones.some(dv => dv.idDetalle === d.id && dv.estado === 'abierta'))
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=1024,height=800')
@@ -2734,27 +2735,24 @@ ${procsSections}
           <span style={{ fontSize: 12, color: '#94A3B8', marginRight: 'auto', fontFamily: 'var(--f-mono)' }}>
             BR-{id} · {procesoInfo?.descripcion}
           </span>
-          {procesoActivo != null && !allDetallesCurrentDone && !procesosCerrados.has(procesoActivo) && !soloLectura && (
+          {procesoActivo != null && !procesosCerrados.has(procesoActivo) && !soloLectura && (!allDetallesCurrentDone || !sinDesviacionesAbiertasProceso) && (
             <span id="cerrar-hint" style={{ fontSize: 11.5, color: '#D97706', display: 'flex', alignItems: 'center', gap: 5 }}>
               <i className="fa fa-exclamation-triangle" style={{ fontSize: 10 }} aria-hidden="true" />
-              Complete las firmas de todos los formularios para cerrar la etapa
+              {!allDetallesCurrentDone
+                ? 'Complete las firmas de todos los formularios para cerrar la etapa'
+                : 'Cierre las desviaciones abiertas de esta etapa para poder cerrarla'}
             </span>
           )}
           {!soloLectura && procesoActivo != null && !procesosCerrados.has(procesoActivo) && (
             <button
               className="btn btn-warning"
               style={{ fontSize: 12 }}
-              aria-describedby={!allDetallesCurrentDone ? 'cerrar-hint' : undefined}
-              aria-disabled={!allDetallesCurrentDone}
+              aria-describedby={(!allDetallesCurrentDone || !sinDesviacionesAbiertasProceso) ? 'cerrar-hint' : undefined}
+              aria-disabled={!allDetallesCurrentDone || !sinDesviacionesAbiertasProceso}
               onClick={handleCerrarProceso}
-              disabled={!allDetallesCurrentDone}
+              disabled={!allDetallesCurrentDone || !sinDesviacionesAbiertasProceso}
             >
               <i className="fa fa-lock" aria-hidden="true" /> Cerrar Proceso
-            </button>
-          )}
-          {!soloLectura && brFinalizado && estructura.every(p => procesosCerrados.has(p.id)) && (
-            <button className="btn btn-danger" style={{ fontSize: 12 }} onClick={handleCerrarBatch}>
-              <i className="fa fa-times-circle" /> Cerrar Batch
             </button>
           )}
           {brFinalizado && (

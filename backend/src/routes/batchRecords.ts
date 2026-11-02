@@ -437,6 +437,17 @@ batchRecordsRouter.post(
       }
     }
 
+    // Antes solo "Liberar" revisaba que no quedaran desviaciones abiertas — una etapa con un
+    // valor fuera de rango sin disponer se podía cerrar igual, y el problema solo se detectaba
+    // hasta el final del lote. Se acota a los campos de esta etapa (no todo el lote), igual
+    // criterio que las firmas requeridas arriba.
+    const desviacionAbierta = await prisma.desviacion.findFirst({
+      where: { idBatchRecord, idDetalle: { in: estructura[idx].detalles.map((rd) => rd.idDetalle) }, estado: 'abierta' },
+    })
+    if (desviacionAbierta) {
+      throw new ConflictError(`No se puede cerrar esta etapa: tiene una desviación abierta sin disponer (${desviacionAbierta.labelCampo})`)
+    }
+
     const yaCerrada = await prisma.batchRecordProcesoCierre.findUnique({
       where: { idBatchRecord_idProceso: { idBatchRecord, idProceso } },
     })
